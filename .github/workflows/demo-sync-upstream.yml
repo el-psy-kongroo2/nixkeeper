@@ -1,0 +1,23 @@
+name: "Demo: sync from nixkeeper"
+
+# Keeps this demo's code and lists those of nixkeeper/nixkeeper: merges its
+# main into this fork's every day. With a personal token
+# (UPSTREAM_SYNC_TOKEN: Contents and Workflows, read and write, this
+# repository only): the workflow's own can't push workflow changes, and its
+# pushes wouldn't republish the page.
+on:
+  schedule:
+    - cron: '30 5 * * *'   # daily, 05:30 UTC
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge nixkeeper's main into this fork's
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: gh api --method POST "repos/$REPO/merge-upstream" -f branch=main
