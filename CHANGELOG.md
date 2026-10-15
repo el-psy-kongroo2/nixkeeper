@@ -9,7 +9,55 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ## [Unreleased]
 
+### Added
+
+- `llms.txt` beside the page (nixkeeper.com/llms.txt): for AI assistants
+  and tools, what nixkeeper is, the page's addresses, where the data and the
+  digests are and how to read them (the page itself is drawn by JavaScript),
+  and that its suggestions are hints for a person to check.
+
+## [0.18.0] - 2026-10-14
+
+Ready to be shown around. A live dashboard of lists,
+[demo.nixkeeper.com](https://demo.nixkeeper.com/), sits beside the
+community one to compare, and a copy of the repository no longer opens the
+community's subscribers' issues. **Questions and feedback** go to
+Discussions, under the NixOS community's code of conduct. The docs a
+newcomer reads are rewritten: the README, Reading the page (in sections),
+a dashboard of your own (tried on a fresh account), and new screenshots of
+both views. On phones, a list no longer starts with an empty band, and a
+link to a package opens its details. Why things fail files kernel modules
+under the kernel's change, not the compiler's.
+
 ### Changed
+
+- The repository's front door: questions, ideas and feedback go to
+  [Discussions](https://github.com/nixkeeper/nixkeeper/discussions) (the
+  issue forms and the README link there); "Something looks wrong" asks
+  where it was seen (nixkeeper.com, the demo, or a copy) and says how fresh
+  the data is; "Track a package" is gone (nixkeeper.com tracks every
+  package); "Get notified" is among the issue links. A code of conduct (the
+  NixOS community's), the digests in SECURITY.md's scope, and the README
+  says nixkeeper isn't affiliated with the NixOS Foundation. The pull
+  request template says what a subscription or a community rule needs (just
+  why), and asks for `nix flake check` and `docs/command.md` too.
+
+- `nix run .#screenshots` takes both sets in nixkeeper's repository: the
+  overview's from the community instance's data and the list's from the
+  demo's (demo.nixkeeper.com), with `--overview-data` and `--list-data` to
+  point either elsewhere (or `none`); a copy still takes its own data's
+  set, and `--data` one data alone, as before. The list's panel opens on the
+  4th row by default (was the 10th, below the shot since the rows grew).
+
+- A copy of this repository no longer opens status issues for the
+  maintainers and teams in `notifications/`: those files are the community
+  instance's subscribers, and a copy's syncs opened their issues and
+  mentioned them. They're read with every package (the community instance)
+  or where `NIXKEEPER_SUBSCRIBERS` is `true` (a copy with subscribers of its
+  own). A copy's own status issue is as before. The guide to a dashboard of
+  your own loses its "delete these files" step, and links
+  [demo.nixkeeper.com](https://demo.nixkeeper.com/), a live dashboard of
+  lists, to compare with nixkeeper.com.
 
 - With the repository variable `NIXKEEPER_STARTED_OUTSIDE` set (the
   community instance: start-runs starts its syncs), the sync's own schedule
@@ -19,6 +67,14 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   skipped, the next at 12:15). Without it, as before.
 
 ### Fixed
+
+- A link to one package (`?pkg=firefox`, and the overview's package links)
+  opens its details: it showed the package alone with its panel closed, one
+  more tap, on a phone the whole screen's worth. Closed, they stay closed.
+
+- On phones and narrow windows, the ways to narrow a list (Without
+  maintainer, Older than...) stay in the counts' sideways row: they wrapped
+  into a column that left a tall empty band above the list.
 
 - **Why things fail**: a kernel module failing with an implicit function
   declaration or incompatible pointer types is under "Kernel driver vs. a
@@ -1726,7 +1782,8 @@ to its restructuring into a Python package.
   packages removed from the lists don't leave files behind.
 - The sync script is a Python package (`nixkeeper/`) with tests in `tests/`.
 
-[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.17.0...HEAD
+[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.14.1...v0.15.0

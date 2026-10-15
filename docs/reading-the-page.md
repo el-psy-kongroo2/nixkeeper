@@ -100,7 +100,7 @@ A list says what it is under "Showing" (✕ goes back to the overview):
 | a maintainer's packages | `?maintainer=handle` (`none` for those with none) |
 | a team's | `?team=gaming` (any case) |
 | a set's | `?set=haskellPackages` |
-| one package alone | `?pkg=firefox` |
+| one package alone, its details open | `?pkg=firefox` |
 | marked broken, blocked by a dependency | |
 | fixes to backport: a CVE fixed on nixpkgs master but still affected on the newest release branch (on the overview, a note under Vulnerable, as unstable has the fix; the details say which) | `?view=backport` |
 | one of the instance's lists | `?list=` (by address only) |
@@ -177,6 +177,11 @@ merged since that likely fixes it, waiting for Hydra.
 - its issues that look done (a build failure that builds on Hydra now, an
   update request nixpkgs has met; "check the condition" when the title
   names something Hydra doesn't build) or still fail.
+
+These are worked out automatically, from titles, Hydra's builds and the
+merge bot's rules: hints for a person to check before acting (closing an
+issue, merging a PR), not decisions. nixkeeper itself never comments on,
+closes or merges anything in nixpkgs.
 
 ### Maintainers and teams
 

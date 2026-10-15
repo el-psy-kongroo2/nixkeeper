@@ -73,7 +73,10 @@ nixpkgs-update attempts, vulnerable or marked broken, with their trends;
 the newest and longest-standing of each; the failing dependencies that stop
 the most other builds; why things fail (failed builds grouped by the same
 error, the update bot's failures by cause); and what was fixed in the last
-week, longest-standing first, with who opened and merged each fix.
+week, longest-standing first, with who opened and merged each fix. A
+dashboard of your own tracks only your lists, with no overview:
+[demo.nixkeeper.com](https://demo.nixkeeper.com/) is one, live (a maintainer's
+packages and the NixOS gaming team's), to compare.
 
 <p align="center">
   <picture>
@@ -155,10 +158,11 @@ page that shows it. [How it works](docs/how-it-works.md) explains each part;
 
 ## Get started
 
-**A dashboard of your own on GitHub.** Copy this repository, list your
+**A dashboard of your own on GitHub.** Fork this repository, list your
 GitHub handle and any other packages in `package-lists/`, and turn on
 GitHub Pages: GitHub Actions syncs it daily, with nothing to host. See
-[a dashboard of your own](docs/your-own-instance.md).
+[a dashboard of your own](docs/your-own-instance.md), and
+[demo.nixkeeper.com](https://demo.nixkeeper.com/) for one live.
 
 **The command, on your computer.**
 
@@ -191,8 +195,8 @@ services.nixkeeper = {
 See [nixkeeper on NixOS](docs/nixos.md) or
 [nixkeeper on macOS](docs/darwin.md).
 
-**Tried it?** [Tell us how it went](https://github.com/nixkeeper/nixkeeper/issues/53):
-how you run it, what was confusing, what's missing.
+**Tried it?** [Tell us how it went](https://github.com/nixkeeper/nixkeeper/discussions):
+how you run it, what was confusing, what's missing. Questions go there too.
 
 ## Documentation
 
@@ -211,11 +215,22 @@ how you run it, what was confusing, what's missing.
 How the code is laid out, the commands, and how changes and releases happen
 are in [CONTRIBUTING.md](CONTRIBUTING.md); what changed in each version, in
 [CHANGELOG.md](CHANGELOG.md). Security problems: [SECURITY.md](SECURITY.md).
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
+**AI & automation disclosure.** nixkeeper's code and documentation are
+written with the assistance of an AI (Claude, by Anthropic), with a person
+in the loop: its maintainer decides what to build, and reviews and tests
+every change before it's merged. The page's suggestions (an issue that looks
+done, an update PR ready for the merge bot) are worked out by automation
+from public data: hints for a person to check, not decisions.
 
 ## License
 
 nixkeeper's code and its brand assets (`assets/brand/`) are released under
 the [MIT License](LICENSE).
+
+nixkeeper is an independent community project, not affiliated with or
+endorsed by the NixOS Foundation.
 
 The published data (the `data` branch) is collected from other projects and
 remains subject to their terms: [Repology](https://repology.org), nixpkgs'

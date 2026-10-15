@@ -44,6 +44,7 @@ choose others; a flag wins over its variable:
 | `--notify` | `NIXKEEPER_NOTIFY` | `none` | `github-issue` to keep the status issues up to date (the workflows set it) |
 | | `NIXKEEPER_GITHUB_REPO` | the workflow's repo | where the status issues live |
 | | `NIXKEEPER_NOTIFICATIONS` | `notifications/` beside the lists | who gets a status issue of their own ([notifications.md](notifications.md)) |
+| | `NIXKEEPER_SUBSCRIBERS` | on with every package, else off | whether those in `notifications/` get their issues (`true` or `false`) |
 | | `NIXKEEPER_PAGE_URL` | the GitHub Pages site | the page link in notifications |
 | | `NIXKEEPER_CONTACT` | – | how you can be reached (an email or a URL), added to the User-Agent nixkeeper sends to the sources; see below |
 | `--all-packages` (sync) | `NIXKEEPER_ALL_PACKAGES` | – | `1` to track every nixpkgs package, not only the lists' ([every package](all-packages.md)) |
@@ -90,13 +91,13 @@ tests, both modules evaluated, the NixOS module booted in a VM), but to move
 only from release to release, name a version tag:
 
 ```nix
-inputs.nixkeeper.url = "github:nixkeeper/nixkeeper/v0.17.0";
+inputs.nixkeeper.url = "github:nixkeeper/nixkeeper/v0.18.0";
 ```
 
 `nix flake update` then leaves it alone; you upgrade by changing the tag,
 after reading that release's notes in [CHANGELOG.md](../CHANGELOG.md). Version
 tags never move, so a tag always means the same code. The same works for
-`nix profile install github:nixkeeper/nixkeeper/v0.17.0`.
+`nix profile install github:nixkeeper/nixkeeper/v0.18.0`.
 
 With `inputs.nixkeeper.inputs.nixpkgs.follows = "nixpkgs";` (one nixpkgs in
 your lock), nixkeeper builds against your nixpkgs rather than the one its CI
