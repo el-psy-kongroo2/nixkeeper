@@ -629,6 +629,10 @@ function versionCell(pkg, st) {
   const steps = mid
     ? html`${step('v-mid', pkg.nixVersion, mid, ' merged')}${step('v-next', mid, target, '')}`
     : step('v-next', pkg.nixVersion, target, merged ? ' merged' : '');
+  // The update's badge alone (no other badge, master not partway): between
+  // the two versions, level with the row's GitHub counts.
+  const update = mid ? openPrBadge(pkg) : prBadge(pkg);
+  const solo = !mid && String(update) && !String(about) && !String(failing);
   const said = mid
     ? `${now}, on master ${mid}, newest ${target || 'unknown'}`
     : `${now}, newest ${target || 'unknown'}`;
@@ -638,7 +642,7 @@ function versionCell(pkg, st) {
     ${steps}
     </button>
     <span class="v-tags top">${about}</span>${mid ? html`<span class="v-tags mid">${masterBadge(pkg)}</span>` : ''}
-    <span class="v-tags bottom">${mid ? openPrBadge(pkg) : prBadge(pkg)}${failing}</span>
+    <span class="v-tags bottom${solo ? ' solo' : ''}">${update}${failing}</span>
   </div>`;
 }
 
@@ -1687,6 +1691,20 @@ const CARDS = [
   },
   { key: 'broken', label: 'Marked broken', view: 'broken', filter: null, color: 'var(--caution)' },
 ];
+// A package that moves with others (one package file, one version: the
+// sync's family, datastore.grouped) is one line in the overview's lists:
+// what they're called together and how many (huaweicloudsdk* ·187),
+// opening a search for them; without a shared start, its name and +N,
+// opening it.
+const familyName = (name, family) =>
+  family
+    ? html`<span class="hl-name mono" title="${fmt(family.more + 1)} packages, one update: ${family.label || name} and the like">${family.label || name}</span><span class="hl-family">${family.label ? fmt(family.more + 1) : `+${fmt(family.more)}`}</span>`
+    : html`<span class="hl-name mono">${name}</span>`;
+const familyLink = (name, family) =>
+  family?.label
+    ? html`href="?q=${encodeURIComponent(family.label.replace(/\*$/, ''))}"`
+    : html`href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}"`;
+
 // The overview's lists of the newest and longest-standing (the manifest's
 // highlights), and which of the two each shows.
 const HIGHLIGHTS = [
@@ -1713,8 +1731,8 @@ function highlightsHtml() {
       ${
         items.length
           ? html`<ol class="hl-list">${items.map(
-              ([name, since, letter]) =>
-                html`<li><a class="hl-row" href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}"><span class="status-dot ${NAME_DOTS[letter[0]] || 'neutral'}" aria-hidden="true"></span><span class="hl-name mono">${name}</span><span class="hl-age" title="Since ${longDate(since)}">${shortAge(since)}</span></a></li>`,
+              ([name, since, letter, family]) =>
+                html`<li><a class="hl-row" ${familyLink(name, family)}><span class="status-dot ${NAME_DOTS[letter[0]] || 'neutral'}" aria-hidden="true"></span>${familyName(name, family)}<span class="hl-age" title="Since ${longDate(since)}">${shortAge(since)}</span></a></li>`,
             )}</ol>`
           : html`<p class="hl-none">None right now.</p>`
       }
@@ -2029,8 +2047,8 @@ function fixedHtml() {
       ${
         f.newest.length
           ? html`<ol class="hl-list">${f.newest.map(
-              ([name, at, from, to, credit, since]) =>
-                html`<li><a class="hl-row" href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}"${credit ? html` title="${creditText(credit)}"` : ''}><span class="status-dot ok" aria-hidden="true"></span><span class="hl-name mono">${name}</span>${to ? html`<span class="fixed-to mono" title="${from} → ${to}">→ ${to}</span>` : ''}${credit && creditName(credit) ? html`<span class="fixed-by">@${creditName(credit)}</span>` : ''}${
+              ([name, at, from, to, credit, since, family]) =>
+                html`<li><a class="hl-row" ${familyLink(name, family)}${credit ? html` title="${creditText(credit)}"` : ''}><span class="status-dot ok" aria-hidden="true"></span>${familyName(name, family)}${to ? html`<span class="fixed-to mono" title="${from} → ${to}">→ ${to}</span>` : ''}${credit && creditName(credit) ? html`<span class="fixed-by">@${creditName(credit)}</span>` : ''}${
                   since
                     ? html`<span class="hl-age" title="Fixed ${longDate(at)}, ${FIXED_SINCE[key]} since ${longDate(since)}">after ${shortAge(since, new Date(at).getTime())}</span>`
                     : html`<span class="hl-age" title="${longDate(at)}">${shortAge(at)}</span>`
@@ -3571,7 +3589,7 @@ function fillDetail(pkg, el, entries) {
     <div class="pd-head">
       <span class="pd-verdict ${verdict[0]}">${verdict[1]}</span>
       <dl class="pd-facts">${facts.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
-      ${source ? html`<span class="pd-source ${source[0]}" title="${source[3]}">${icon(source[1])}${source[2]}</span>` : ''}
+      ${source ? html`<span class="pd-source ${source[0]}" title="${source[3]}">${icon(source[1])}<span class="pd-source-text">${source[2]}</span></span>` : ''}
     </div>
     ${String(urgent).trim() ? html`<div class="pd-notes">${urgent}</div>` : ''}
     ${vulnSection(pkg)}

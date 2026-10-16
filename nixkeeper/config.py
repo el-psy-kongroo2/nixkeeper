@@ -264,8 +264,44 @@ COUNTING_CHANGES = [
         "text": "GitHub releases checked for every package fetched from GitHub: "
         "newer ones Repology hasn't seen count as outdated",
     },
+    {
+        # The first of the two merged (#242, coq); the second the same day.
+        "merged": "2026-10-15T11:55:00+00:00",
+        "text": "kept series: coq's aren't devel variants, and a release kept "
+        "only beside its own beta (firefox) counts as the main line",
+    },
+    {
+        # Set to the merge's time when it's merged.
+        "merged": "2026-10-15T15:00:00+00:00",
+        "text": "kept series behind in their own series count as outdated "
+        "(glibmm_2_4 2.66.8, 2.66.10 out)",
+    },
+    {
+        # Set to the merge's time when it's merged.
+        "merged": "2026-10-15T17:00:00+00:00",
+        "text": "one distribution's snapshot of a release isn't a newer version "
+        "(mintotp 0.3.0, SlackBuilds' 0.3.0.20240120)",
+    },
 ]
 KEPT = "legacy"
+# Repology's repositories that are a language's own package index, where a
+# version is the upstream release itself, not a distribution's packaging
+# (rows.snapshot_only: iso4217's 1.16.20260101 on PyPI is a release).
+UPSTREAM_INDEXES = {
+    "cpan",
+    "cran",
+    "crates_io",
+    "gnu_elpa",
+    "hackage",
+    "luarocks",
+    "melpa",
+    "melpa_stable",
+    "metacpan",
+    "opam",
+    "pypi",
+    "rubygems",
+    "stackage_lts",
+}
 
 # Hydra, nixpkgs' build farm. The nixpkgs/unstable jobset builds master (not the
 # nixos-unstable channel, which only advances once enough of it has built).

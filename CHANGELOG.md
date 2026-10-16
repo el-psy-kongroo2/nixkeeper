@@ -16,6 +16,126 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   digests are and how to read them (the page itself is drawn by JavaScript),
   and that its suggestions are hints for a person to check.
 
+### Changed
+
+- In the table, an update's badge (its PR, "on master", or the branch that
+  has it) that's the version's only badge sits between the two versions,
+  level with the row's PR and issue counts, rather than beside the newest
+  version below them. With other badges, and on phones and tablets (the
+  counts on a line of their own), where it was.
+
+- On phones and tablets, a package's PR and issue counts are on a line of
+  their own in every card, not beside the build when it happened to fit
+  (cards looked uneven), and a badge that's a link (an update PR) is a pill
+  like the others: its tap area made 32px tall had made it an oval with
+  its text at the top. The tap area is still that size.
+
+- A phone no longer shows a team's, a maintainer's or a package's page
+  zoomed out: the team's or maintainer's box was as wide as its row of
+  filters (about 1,400px, which now swipes sideways on its own), and a
+  package's panel as wide as its longest source label (which now ends in
+  "…", in full on hover). A version too long for its card breaks rather
+  than push the card's badges past its edge.
+
+- A staging-next merge's mark on the trends is solid, a counting change's
+  still dashed: at a sparkline's size their grey and amber were hard to
+  tell apart. The key under the cards matches.
+
+- An older series nixpkgs keeps beside a newer one is outdated when a newer
+  release is out in its own series, as the page always said ("not outdated
+  while nothing newer is out in its own series"): glibmm_2_4 2.66.8 with
+  2.66.10 out, tcl 8.6.16 (8.6.18), electron_40, thunderbird-153, go 1.26,
+  django 5.2 (40 packages on 2026-10-15). It's still named beside the newer
+  one, and kept again once the channel has its series' newest. Counted only
+  on good evidence: two distributions or more besides nixpkgs (debian_13
+  and debian_unstable are one), the newest of them but not a packaging's
+  added part (ruby 3.4.11, not Chocolatey's 3.4.11.1), in the version's
+  shape, no pre-release, packaging revision or added part, not
+  for an attribute naming its whole version (sbcl_2_4_6), and for a series
+  not named by its attribute, of three parts or more, its major.minor
+  (linux 6.18, not 6.19). Marked on the trends as a counting change.
+  nixkeeper's own release checks, which can't tell a series, leave such a
+  series' target alone as they do a kept one's: electron_42 42.11.10
+  suggests 42.11.14, not Electron's newest, 44.7.2 (and electron 43,
+  libtorrent-rasterbar-1_2_x, cython, django 5.2 on the first sync).
+
+- The overview's lists (the newest and longest-standing, what was fixed)
+  show packages one update moves together as one line, with how many: the
+  same package file in nixpkgs, version and homepage (the rows'
+  `family`), like the 187 `python313Packages.huaweicloudsdk*` packages or a
+  kernel module once per kernel, which filled a list of 8 by themselves.
+  The line opens a search for them. Fixes are grouped from the sync after
+  the one that marks the families. The cards still count packages.
+
+### Fixed
+
+- A package's open update PR is found when its title names another of the
+  package's attributes, all at its one version: heroic's update is titled
+  "heroic-unwrapped: 2.22.3 -> 2.22.4", and showed only under "On GitHub",
+  not as the update PR. The same for firefoxpwa, rust-bindgen, dart
+  (dart-bin), quarto (quartoMinimal) and others (25 on 2026-10-15), and
+  for update PRs merged into master.
+
+- A package Repology calls outdated only because one distribution packages
+  a snapshot of the same release, its version with a date added, is the
+  newest: python3Packages.mintotp 0.3.0, against SlackBuilds' git snapshot
+  0.3.0.20240120 (also langid, hg-git and rcshist: 4 packages on
+  2026-10-15). Not when an upstream index has the version (iso4217's
+  1.16.20260101 is a release on PyPI), nor when two distributions or more
+  do (fcitx5-pinyin-zhwiki's 0.3.0.20260416). Marked on the trends as a
+  counting change.
+
+- An older series nixpkgs keeps beside a newer one (python313 beside
+  python315), and behind in its own series, is compared within it:
+  python313 3.13.15 suggests 3.13.16, not Python's newest, 3.15.0; the same
+  for python3 and python314 (3.14.8), mariadb's series, ffmpeg_8, lua5_4,
+  gtkmm3 and others (33 on 2026-10-15). Still outdated; only the version it
+  points to changes.
+  The same evidence rules as for a kept series, except one distribution is
+  enough: libsigcxx_2_0 2.12.1 suggests 2.12.2, not 2.99.13 (sigc++ 3's
+  previews), vlc-bin 3.0.24, not 3.0.23_2.
+
+- A release Repology calls legacy only because nixpkgs also packages its
+  beta (firefox 157.0.1 beside firefox-devedition 158.0b1) is the main
+  line: outdated when a newer release is out (Firefox 158.0), so its update,
+  once merged, shows as on master. It never counted as outdated before. 3
+  packages on 2026-10-15 (firefox, hbase, premake). Marked on the trends as
+  a counting change, with the coq fix.
+  A version named a release (godot's 4.7.2-stable, whisparr's
+  3.6.2-release.1727) isn't taken for a beta: the 2026-10-15 13:14 sync
+  showed 40 kept godot series (godot3, godot_4_3 to godot_4_6 and their
+  templates and mono builds) and 2 others as outdated against 4.7.2; they
+  are kept again.
+
+- godot 4.7.2-stable is no longer outdated against 4.7.2: Repology ranks a
+  word naming the release ("stable") lower, so it called nixpkgs' godot
+  (and godot_4, godot_4_7) outdated since nixkeeper began. Only when that
+  word is the whole difference.
+
+- A kept series names the release it's kept beside at the channel's
+  version, as that release's own row shows it, not Repology's older one
+  (firefox-esr beside firefox 158.0, not 157.0.1; kernel modules beside the
+  newest kernel's: 206 on 2026-10-15). Nothing counts differently.
+
+- A package shown at the channel's version, newer than Repology's, no
+  longer carries Repology's vulnerable flag, which was for Repology's
+  version (firefox-esr 153.5.0esr was flagged for 153.4.0's CVEs); the
+  NixOS security tracker's and OSV's verdicts are checked against the
+  version shown. A kept series names the release it's kept beside rather
+  than a beta (firefox-esr beside firefox, not firefox-devedition).
+
+- A kept older series (firefox-esr beside Firefox, a kernel module for an
+  older kernel) shows the channel's version when Repology is behind, as
+  other packages do: firefox-esr showed Repology's 153.4.0 while
+  nixos-unstable had 153.5.0esr, and its vulnerable flag with it (108
+  such on 2026-10-15). Its status stays a kept series.
+
+- A Repology project of kept series only (coq's, since its current
+  version moved to rocq) takes its newest series as the stable one, not the
+  shortest name: every newer series (`coq_8_8` to `coq_8_20`) had become a
+  devel variant behind the newest and counted as outdated, filling the
+  overview's newest outdated.
+
 ## [0.18.0] - 2026-10-14
 
 Ready to be shown around. A live dashboard of lists,

@@ -1,5 +1,6 @@
 import unittest
 
+from nixkeeper import rows as rows_module
 from nixkeeper.rows import (
     add_source_links,
     build_rows,
@@ -33,6 +34,270 @@ class Rows(unittest.TestCase):
         self.assertEqual(
             (devel["name"], devel["nixVersion"], devel["devel"]),
             ("wesnoth-devel", "1.19.24", True),
+        )
+
+    def test_kept_only_beside_a_beta_is_the_main_line(self):
+        # firefox, 2026-10-15: Repology called 157.0.1 legacy because nixpkgs
+        # also has firefox-devedition 158.0b1; 158.0 was out.
+        entries = [
+            nix("firefox", "157.0.1", "legacy"),
+            nix("firefox-devedition", "158.0b1", "outdated"),
+            other("arch", "158.0", "newest"),
+            other("arch", "159.0b2", "devel"),
+        ]
+        rows = {
+            r["name"]: r
+            for r in self.rows(
+                project(
+                    "firefox", ["firefox", "firefox-devedition"], entries, "firefox"
+                )
+            )
+        }
+        firefox = rows["firefox"]
+        # And firefox-esr, kept beside the release, not the beta.
+        esr_entries = [
+            nix("firefox-esr", "153.4.0", "legacy"),
+            nix("firefox", "158.0", "newest"),
+            nix("firefox-devedition", "159.0b1", "devel"),
+            other("arch", "158.0", "newest"),
+        ]
+        esr = {
+            r["name"]: r
+            for r in self.rows(
+                project(
+                    "firefox",
+                    ["firefox-esr", "firefox", "firefox-devedition"],
+                    esr_entries,
+                    "firefox",
+                )
+            )
+        }["firefox-esr"]
+        self.assertEqual(esr["keptBeside"], {"attr": "firefox", "version": "158.0"})
+        self.assertEqual(
+            (firefox["nixStatus"], firefox["refVersion"], firefox["devel"]),
+            ("outdated", "158.0", False),
+        )
+        self.assertNotIn("keptBeside", firefox)
+        # Beside a newer stable release (gnumake42 beside gnumake): still kept.
+        kept = [
+            nix("gnumake42", "4.2.1", "legacy"),
+            nix("gnumake", "4.4.1", "newest"),
+            other("arch", "4.4.1", "newest"),
+        ]
+        rows = {
+            r["name"]: r
+            for r in self.rows(
+                project("gnumake", ["gnumake42", "gnumake"], kept, "gnumake")
+            )
+        }
+        self.assertEqual(rows["gnumake42"]["nixStatus"], "legacy")
+        # Beside a release named "-stable" (godot_4_5 beside godot
+        # 4.7.2-stable, 2026-10-15): a release, not a beta; still kept.
+        godot = [
+            nix("godot_4_5", "4.5.1-stable", "legacy"),
+            nix("godot", "4.7.2-stable", "outdated"),
+            other("arch", "4.7.2", "newest"),
+        ]
+        rows = {
+            r["name"]: r
+            for r in self.rows(project("godot", ["godot_4_5", "godot"], godot, "godot"))
+        }
+        self.assertEqual(rows["godot_4_5"]["nixStatus"], "legacy")
+        self.assertEqual(
+            rows["godot_4_5"]["keptBeside"],
+            {"attr": "godot", "version": "4.7.2-stable"},
+        )
+
+    def test_outdated_only_by_a_release_word(self):
+        """godot, 2026-10-15: 4.7.2-stable, which Repology ranks below 4.7.2."""
+        entries = [
+            nix("godot", "4.7.2-stable", "outdated"),
+            other("arch", "4.7.2", "newest"),
+        ]
+        (row,) = self.rows(project("godot", ["godot"], entries, "godot"))
+        self.assertEqual(row["nixStatus"], "newest")
+        # Behind by more than the word: still outdated.
+        entries[0] = nix("godot", "4.7.1-stable", "outdated")
+        (row,) = self.rows(project("godot", ["godot"], entries, "godot"))
+        self.assertEqual((row["nixStatus"], row["refVersion"]), ("outdated", "4.7.2"))
+        # Nor ahead: Repology's rules have their reasons (xcircuit).
+        entries[0] = nix("godot", "4.8-stable", "outdated")
+        (row,) = self.rows(project("godot", ["godot"], entries, "godot"))
+        self.assertEqual(row["nixStatus"], "outdated")
+
+    def test_outdated_only_by_a_distributions_snapshot(self):
+        """python3Packages.mintotp 0.3.0, 2026-10-15: SlackBuilds' git
+        snapshot 0.3.0.20240120 was the only newer version."""
+
+        def status(nix_version, newest, *repos):
+            entries = [
+                nix("p", nix_version, "outdated"),
+                *(other(r, newest, "newest") for r in repos),
+            ]
+            (row,) = self.rows(project("p", ["p"], entries, "p"))
+            return row["nixStatus"]
+
+        cases = {
+            # One distribution's snapshot: the newest.
+            ("0.3.0", "0.3.0.20240120", ("slackbuilds",)): "newest",
+            ("1.2.0", "1.2.0+20251126", ("void_x86_64",)): "newest",
+            ("1.04", "1.04-20190106", ("gnuguix",)): "newest",
+            ("2.1", "2.1-git20240301.abc1234", ("aur",)): "newest",
+            # One distribution under several names is still one.
+            ("0.3.0", "0.3.0.20240120", ("debian_13", "debian_unstable")): "newest",
+            # On an upstream index: a release (iso4217).
+            ("1.16", "1.16.20260101", ("pypi",)): "outdated",
+            ("5.6.3.6", "5.6.3.6.20240818", ("pypi", "macports")): "outdated",
+            # In several distributions (fcitx5-pinyin-zhwiki).
+            ("0.3.0", "0.3.0.20260416", ("arch", "debian_13")): "outdated",
+            # Not only a date added: a newer release.
+            ("0.3.0", "0.3.1", ("slackbuilds",)): "outdated",
+            ("0.3.0", "0.3.0.1", ("slackbuilds",)): "outdated",
+            ("0.3.0", "0.4.0.20240120", ("slackbuilds",)): "outdated",
+        }
+        for (version, newest, repos), expected in cases.items():
+            with self.subTest(newest=newest, repos=repos):
+                self.assertEqual(status(version, newest, *repos), expected)
+
+    def test_an_older_series_compared_within_it(self):
+        # python313 beside python315, 2026-10-15: behind in 3.13, not 3.15.
+        entries = [
+            nix("python313", "3.13.15", "outdated"),
+            nix("python315", "3.15.0", "newest"),
+            other("arch", "3.15.0", "newest"),
+            other("debian", "3.13.16", "legacy"),
+            other("fedora", "3.13.9999", "rolling"),
+            other("aur", "3.13.17rc1", "outdated"),
+        ]
+        rows = {
+            r["name"]: r
+            for r in self.rows(
+                project("python", ["python313", "python315"], entries, "python")
+            )
+        }
+        self.assertEqual(rows["python313"]["refVersion"], "3.13.16")
+        self.assertEqual(rows["python313"]["nixStatus"], "outdated")
+        self.assertEqual(rows["python315"]["refVersion"], "3.15.0")
+        # Nothing newer known in its series: Repology's verdict as it is.
+        entries[3] = other("debian", "3.13.15", "legacy")
+        rows = {
+            r["name"]: r
+            for r in self.rows(
+                project("python", ["python313", "python315"], entries, "python")
+            )
+        }
+        self.assertEqual(rows["python313"]["refVersion"], "3.15.0")
+
+    def kept(self, name, version, newer, *others):
+        """name's row, kept at version beside newer, with others' entries."""
+        entries = [
+            nix(name, version, "legacy"),
+            nix("main", newer, "newest"),
+            other("arch", newer, "newest"),
+            *others,
+        ]
+        rows = self.rows(project("p", [name, "main"], entries, "p"))
+        return next(r for r in rows if r["name"] == name)
+
+    def test_a_kept_series_behind_in_it(self):
+        # glibmm_2_4 2.66.8 beside glibmm 2.88.0, 2026-10-15: 2.66.10 out.
+        row = self.kept(
+            "glibmm_2_4",
+            "2.66.8",
+            "2.88.0",
+            other("debian_13", "2.66.10", "legacy"),
+            other("alpine_edge", "2.66.10", "legacy"),
+        )
+        self.assertEqual(
+            (row["nixStatus"], row["refVersion"], row["keptBeside"]["version"]),
+            ("outdated", "2.66.10", "2.88.0"),
+        )
+        # Once the channel has it: kept again.
+        channel_versions([row], {"glibmm_2_4": pkg("glibmm_2_4", version="2.66.10")})
+        self.assertEqual(row["nixStatus"], "legacy")
+
+    def test_a_kept_series_not_by_its_packaging(self):
+        # ruby 3.4.9, 2026-10-15: 3.4.11 in five distributions, Chocolatey's
+        # and Liguros' 3.4.11.1 in two.
+        row = self.kept(
+            "ruby_3_4",
+            "3.4.9",
+            "4.0.7",
+            *(other(r, "3.4.11", "legacy") for r in ("homebrew", "macports", "void")),
+            *(other(r, "3.4.11.1", "legacy") for r in ("chocolatey", "liguros")),
+        )
+        self.assertEqual((row["nixStatus"], row["refVersion"]), ("outdated", "3.4.11"))
+        # But a newer one, or one in more distributions, is taken.
+        row = self.kept(
+            "ruby_3_4",
+            "3.4.9",
+            "4.0.7",
+            *(other(r, "3.4.11", "legacy") for r in ("homebrew", "macports")),
+            *(other(r, "3.4.12", "legacy") for r in ("arch", "fedora")),
+        )
+        self.assertEqual(row["refVersion"], "3.4.12")
+
+    def test_a_kept_series_needs_good_evidence(self):
+        cases = {
+            # One distribution only (debian_13 and debian_unstable are one).
+            "one": (
+                "glibmm_2_4",
+                "2.66.8",
+                "2.88.0",
+                "2.66.10",
+                ["debian_13", "debian_unstable"],
+            ),
+            # Only adding a part (deepin's 2.69.1) or a revision (1.91.0-1).
+            "part": ("autoconf269", "2.69.5", "2.72", "2.69.5.1", ["deepin", "fedora"]),
+            "revision": ("boost", "1.91.0", "1.92.0", "1.91.0-1", ["xrepo", "fedora"]),
+            # The attribute names the whole version.
+            "pinned": ("sbcl_2_4_6", "2.4.6", "2.6.0", "2.4.11", ["alpine", "fedora"]),
+            # Another numbering, and the next major's previews.
+            "numbering": (
+                "zulu17",
+                "17.0.19",
+                "21.0.11",
+                "17.68.203",
+                ["macports", "aur"],
+            ),
+            "previews": ("gimp2", "2.10.38", "3.2.0", "2.99.10", ["mageia", "fedora"]),
+            # Not in version's shape (jdk8 8u504-b01, 8.452.09 elsewhere).
+            "shape": ("jdk8", "8u504-b01", "21.0.11", "8.452.09", ["pisi", "fedora"]),
+            # A series named by its major, of three parts: major.minor (linux
+            # 6.18 beside 7.2; 6.19 is another series).
+            "wide": ("linux", "6.18.56", "7.2.10", "6.19.14", ["alpine", "fedora"]),
+            # A snapshot.
+            "snapshot": (
+                "fm",
+                "0-unstable-2024-01-03",
+                "1.0",
+                "0.99",
+                ["aur", "fedora"],
+            ),
+        }
+        for case, (name, version, newer, found, repos) in cases.items():
+            with self.subTest(case):
+                row = self.kept(
+                    name, version, newer, *(other(r, found, "legacy") for r in repos)
+                )
+                self.assertEqual(row["nixStatus"], "legacy")
+
+    def test_kept_series_only_none_devel(self):
+        # coq's project once its current version moved to rocq: every
+        # series nixpkgs keeps is legacy. The newest is the stable one, not
+        # the shortest name (coq_8_7), so none is a devel variant behind.
+        entries = [
+            nix("coq_8_7", "8.7.2", "legacy"),
+            nix("coq_8_10", "8.10.2", "legacy"),
+            nix("coq_8_20", "8.20.1", "legacy"),
+            other("arch", "9.3.0", "newest"),
+        ]
+        found = self.rows(
+            project("coq", ["coq_8_7", "coq_8_10", "coq_8_20"], entries, "coq")
+        )
+        self.assertEqual(
+            {r["name"]: r["devel"] for r in found},
+            {"coq_8_7": False, "coq_8_10": False, "coq_8_20": False},
         )
 
     def test_repo_count_counts_repositories(self):
@@ -531,9 +796,87 @@ class ChannelVersions(unittest.TestCase):
         _, changed = self.row("outdated", None, attrs=("p", "q"), index=index)
         self.assertEqual(changed, [])
 
+    def test_a_kept_series_too(self):
+        """firefox-esr, 2026-10-15: the channel had 153.5.0esr, Repology
+        153.4.0. Its status stays: still kept beside the newer line."""
+        row, changed = self.row("legacy", "1.1esr")
+        self.assertEqual(changed, ["p"])
+        self.assertNotIn("nixVulnerable", row)  # Repology's, for 1.0
+        self.assertEqual(
+            (row["nixVersion"], row["nixStatus"], row["repologyVersion"]),
+            ("1.1esr", "legacy", "1.0"),
+        )
+
+    def test_kept_beside_the_channels_version(self):
+        """firefox-esr, 2026-10-15: kept beside firefox, 158.0 in the channel,
+        157.0.1 still on Repology."""
+        entries = [
+            nix("firefox-esr", "153.5.0esr", "legacy"),
+            nix("firefox", "157.0.1", "legacy"),
+            other("arch", "158.0", "newest"),
+        ]
+        rows = build_rows(
+            {"f": project("firefox", ["firefox-esr", "firefox"], entries, "firefox")},
+            {},
+        )
+        esr = next(r for r in rows if r["name"] == "firefox-esr")
+        index = {"firefox": pkg("firefox", version="158.0")}
+        channel_versions(rows, index)
+        self.assertEqual(esr["keptBeside"], {"attr": "firefox", "version": "158.0"})
+        # Not an older one (the channel behind Repology).
+        channel_versions(rows, {"firefox": pkg("firefox", version="157.0")})
+        self.assertEqual(esr["keptBeside"]["version"], "158.0")
+
     def test_statuses_left_alone(self):
-        """A kept older version, or one Repology distrusts."""
-        for status in ("legacy", "untrusted", "noscheme", "ignored"):
+        """Versions Repology distrusts or can't order."""
+        for status in ("untrusted", "noscheme", "ignored"):
             with self.subTest(status):
                 _, changed = self.row(status, "2.0")
                 self.assertEqual(changed, [])
+
+
+class Families(unittest.TestCase):
+    def test_one_file_one_version_one_homepage(self):
+        src = "https://github.com/NixOS/nixpkgs/blob/abc/pkgs/x/indi-3rdparty.nix#L{}"
+        rows = [
+            {
+                "name": f"indi-3rdparty.indi-{n}",
+                "source": src.format(i),
+                "nixVersion": "2.2.4",
+                "homepage": "https://indilib.org",
+            }
+            for i, n in enumerate(("a", "b", "c"))
+        ] + [
+            # The same file, another module's version and homepage (perl).
+            {
+                "name": "perlA",
+                "source": src.format(9),
+                "nixVersion": "0.09",
+                "homepage": "https://metacpan.org/a",
+            },
+            {
+                "name": "perlB",
+                "source": src.format(10),
+                "nixVersion": "0.09",
+                "homepage": "https://metacpan.org/b",
+            },
+            # A set updated in bulk: never.
+            {
+                "name": "rPackages.a",
+                "set": "rPackages",
+                "source": src.format(1),
+                "nixVersion": "2.2.4",
+                "homepage": "https://indilib.org",
+            },
+        ]
+        rows_module.add_families(rows)
+        keys = [r.get("family") for r in rows]
+        self.assertTrue(keys[0] and keys[0] == keys[1] == keys[2])
+        self.assertEqual(keys[3:], [None, None, None])
+
+    def test_label(self):
+        self.assertEqual(
+            rows_module.family_label(["indi-3rdparty.indi-a", "indi-3rdparty.indi-b"]),
+            "indi-3rdparty.indi-*",
+        )
+        self.assertIsNone(rows_module.family_label(["aroccStdenv", "zigStdenv"]))

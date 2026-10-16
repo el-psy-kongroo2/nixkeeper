@@ -38,10 +38,10 @@ list. From the top:
 
   Each has its **trend** (from the second sync on, the last 30 days at
   most) and its change over the last week (since the first sync until
-  there's a week: hover it for which). A grey mark on the trends is a
-  staging-next merge into master (mass rebuilds: failing builds jump for
-  days after), an amber one a change in how nixkeeper counts (it can step a
-  count overnight). The line under the cards names each kind with its days
+  there's a week: hover it for which). A solid grey mark on the trends is
+  a staging-next merge into master (mass rebuilds: failing builds jump for
+  days after), a dashed amber one a change in how nixkeeper counts (it can
+  step a count overnight). The line under the cards names each kind with its days
   ("counting changed Oct 6, Oct 7"), and hovering a day says what happened
   (a staging-next day links its PR). nixkeeper's own releases aren't
   marked: the footer says the version, and one that changes counting has
@@ -55,6 +55,10 @@ list. From the top:
 - **The newest and longest-standing** build failures, outdated packages
   (not those whose update is merged and only waits for the channel) and
   update failures (a switch on each), and "show all" for the whole list.
+  Packages one update moves together (one package file in nixpkgs, one
+  version: `python313Packages.huaweicloudsdk*`, 187 of them, or a kernel
+  module once per kernel) are one line, with how many, opening a search
+  for them; the same in "what was fixed".
   Beside them, the failing packages **blocking the most** others: a build
   that fails because one of its dependencies did, as zh.fail counts them in
   all of nixpkgs (fix that one, and they all build again), and "show all"

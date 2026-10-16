@@ -84,6 +84,30 @@ def compare_components(a, b):
     return 0
 
 
+# Words Repology ranks as pre-release, but that name a release
+# (godot's 4.7.2-stable).
+RELEASE_WORDS = re.compile(
+    r"(?<![A-Za-z])(stable|release|final|ga|lts)(?![A-Za-z])", re.IGNORECASE
+)
+
+
+def is_pre_release(version):
+    """Whether version is a pre-release as Repology orders it (158.0b1,
+    5.0.0-beta8, 1.7.0-rc0): a component ranked before a release's. Not a
+    snapshot ("unstable"), which comes after its version, nor a release
+    named so (4.7.2-stable)."""
+    if not version or UNSTABLE.search(version):
+        return False
+    return any(
+        rank == PRE_RELEASE for rank, _, _ in components(without_release_words(version))
+    )
+
+
+def without_release_words(version):
+    """version without the words naming it a release (4.7.2-stable: 4.7.2)."""
+    return RELEASE_WORDS.sub(" ", version or "")
+
+
 @functools.total_ordering
 class Version:
     """A version as (its components before "unstable", whether it's a
