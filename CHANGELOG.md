@@ -11,6 +11,74 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Added
 
+- What blocks staging-next: a dependency failing there that stops packages
+  building on master says how many in its details ("its failure stops N
+  other packages' builds on staging-next"), a package it stops says which
+  dependency, and the overview's "Blocking the most" has the top ones on
+  staging-next under it (clang-22.0.0-rocm stopped about 750 builds on
+  2026-10-16). From nixkeeper-hydra's `staging-next.json.gz`, which now
+  names each such build's blocker. A forecast: no count includes it.
+
+- The README and `llms.txt` point to
+  [nixkeeper-mcp](https://github.com/nixkeeper/nixkeeper-mcp), an MCP server
+  that lets an AI assistant answer questions about nixpkgs packages from
+  nixkeeper's data: one package's state, what needs attention for a
+  maintainer or a team, build failures, PRs, issues, update attempts, CVEs.
+
+### Fixed
+
+- An outdated package's newest version isn't one distribution's packaging
+  of it, a part added to a release more distributions have: curl 8.23.0,
+  not Baulk's 8.23.0.1; rakudo 2026.09, not AUR's 2026.09_01; yacreader
+  10.4.0, not a build number (9 packages on 2026-10-16). Not when that
+  would leave nothing newer than nixpkgs' version: then the added part may
+  be a real release, seen first in one distribution.
+
+## [0.19.0] - 2026-10-16
+
+Mass rebuilds become visible on their way to master. An update merged into
+**staging or staging-next** says where it is (bash, coreutils, curl and
+about 100 others had shown nothing for weeks), and on staging-next whether
+it builds there. A package that builds on master but fails on staging-next
+is flagged in its details, with a filter to find them: **what breaks when
+staging-next is merged**, before it does. Kept older series (python313,
+firefox-esr, glibmm_2_4) are compared within their own series, and count as
+outdated when a newer release of that series is out. Update PRs are found
+however their titles are written. On phones, pages no longer open zoomed
+out, and the cards line up.
+
+### Added
+
+- What staging-next will break: a package that builds on master but fails
+  its own build on staging-next, at the same version, in Hydra's newest
+  evaluation of it, says so in its details (each failing build linked,
+  the evaluation's day, the staging-next PR it arrives with), and the
+  "Breaks on staging-next" filter (`?refine=stagingnext`) finds them in a
+  maintainer's or a team's list: 314 packages on 2026-10-16, most of them
+  Python. Unless fixed, they fail on master when staging-next is merged.
+  A forecast: no count includes it, and a fix may already be on staging.
+  Not a dependency's failure (that's the dependency's to fix), nor an
+  update in progress there.
+
+- An update on staging-next says how it builds there, from Hydra's newest
+  evaluation of staging-next (about daily, its day said): on every
+  platform, failing where (each build linked), not built yet, or not in
+  that evaluation yet. From nixkeeper-hydra's new `staging-next.json.gz`
+  (the jobs that differ from master); 54 of the 64 updates there built
+  everywhere in the 2026-10-14 evaluation, systemd 262, openssh 10.6p1
+  and vim each failing on a platform.
+  When staging-next has already moved past the PR's version, it says so
+  and how that newer one builds (harfbuzz: a PR to 14.5.0, staging-next
+  at 14.5.1), rather than "isn't in the evaluation yet".
+
+- An update merged into staging or staging-next, the branches mass rebuilds
+  go through, shows where it is: `on staging` or `on staging-next` instead
+  of nothing for the two or three weeks it takes to reach master, and in
+  the details, since when and with which staging-next it arrives (bash,
+  coreutils, curl, cmake, expat and about 100 others on 2026-10-16). From
+  nixkeeper-prs' new staging list (`stagingPR`); still outdated until
+  master has it, and the update bot's icon isn't shown for it.
+
 - `llms.txt` beside the page (nixkeeper.com/llms.txt): for AI assistants
   and tools, what nixkeeper is, the page's addresses, where the data and the
   digests are and how to read them (the page itself is drawn by JavaScript),
@@ -68,6 +136,25 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   the one that marks the families. The cards still count packages.
 
 ### Fixed
+
+- An update PR is found wherever its title makes the update: after
+  another change ("minimage: init at 0.1.4; d-seams: 2.10.0 -> 2.11.0"),
+  or for one of several names ("chromium,chromedriver: ... -> ...", "goose-
+  cli, goose-desktop: ..."): 15 more packages with their update PR on
+  2026-10-16 (d-seams, gnome-graphs, bcftools and htslib, torch, ...).
+
+- A package Repology calls outdated without naming a newer version (in
+  its "-unclassified" projects, every repository outdated) no longer shows
+  "newer version unknown" when an update PR of it, merged or open, brings
+  one: that version (chatgpt 26.1013.31256, swift 6.4.0: 8 packages on
+  2026-10-16), the details saying it's the PR's. The other 150 stay
+  unknown: the newer versions other repositories have there are mostly
+  other software of the same name.
+
+- An update PR whose title goes on after the version ("fribidi: 1.0.16 ->
+  1.0.17, also fix cross", "python313: ... -> 3.13.16; ...") gives that
+  version without the comma or semicolon: 103 PR badges and notes said
+  "9.3.0," or "1.3.2;" (shipwright, vtk, barman, ...) on 2026-10-16.
 
 - A package's open update PR is found when its title names another of the
   package's attributes, all at its one version: heroic's update is titled
@@ -1902,7 +1989,8 @@ to its restructuring into a Python package.
   packages removed from the lists don't leave files behind.
 - The sync script is a Python package (`nixkeeper/`) with tests in `tests/`.
 
-[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.18.0...HEAD
+[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.15.0...v0.16.0

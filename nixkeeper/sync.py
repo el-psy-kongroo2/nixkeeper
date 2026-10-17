@@ -25,7 +25,7 @@ from . import (
     uptodate,
     version,
 )
-from .changes import count_master, is_outdated
+from .changes import count_master, count_prs, is_outdated
 from .sources import (
     about,
     branches,
@@ -280,6 +280,21 @@ def main():
             open_prs=False,
             merged_since=github_bulk.merged_since(revision),
         )
+    # Update PRs merged into staging or staging-next: on their way to master,
+    # the digest's only (it knows where each is).
+    prs_digest.add_staging_prs(outdated, digest.get("staging"))
+    # And how those on staging-next build there (Hydra's evaluation of it).
+    staging_next = branches.load_staging_next(now)
+    branches.apply_staging_next(outdated, staging_next)
+    # And what staging-next breaks: packages that build on master, failing
+    # there themselves (a forecast, for their panel and a filter).
+    cycle = ((digest.get("staging") or {}).get("stagingNext") or {}).get("open")
+    branches.apply_staging_next_breaks(shown, staging_next, cycle)
+    # And who stops whom there: a dependency failing on staging-next.
+    branches.apply_staging_next_blocked(index_rows, staging_next)
+    # Outdated with no newer version named: the newest its update PRs bring.
+    for row in outdated:
+        count_prs(row)
     follows.apply_prs(index_rows, following)  # theirs are the same PRs
     nixpkgs_update.recheck_superseded(outdated)
     # Since when builds and update attempts have been failing (carried over).

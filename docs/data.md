@@ -171,7 +171,9 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
   there are (`count`), how many packages have a build they stopped
   (`packages`, as many as `blocked.json` has, whether nixkeeper-hydra has
   read which dependency it was yet or not), and the 8 that stop the most
-  (`top`), each `[name, row, packages, builds]`;
+  (`top`), each `[name, row, packages, builds]`; and `stagingNext`, the
+  same on staging-next for packages that build on master (`eval`,
+  `evaluatedAt`, `count`, `packages`, `top`), when any are stopped there;
 - `causes` in `index.json`: why things fail, across the rows not in a set
   (`causes.py`): `builds`, the 8 biggest groups of failed builds sharing an
   error, each `{ "key", "count", "reason", "signature", "line", "title"?,
@@ -350,6 +352,10 @@ behind the newest devel version elsewhere (`refVersion`).
 | `master` | the version Hydra built from master, when it's newer than the channel's. That makes the row outdated, waiting for the channel |
 | `openPR` | an open update PR in nixpkgs (below) |
 | `masterPR` | an update PR merged into master that the channel doesn't have yet |
+| `stagingPR` | an update PR merged into staging or staging-next that master doesn't have yet (from nixkeeper-prs only) |
+| `stagingNextBlockedBy` | builds on master, but on staging-next a dependency failing there stops it, at the same version: `eval`, `evaluatedAt`, `builds` (`system`, `build`, `by`: each dependency, `name` and `row` when it's a row) |
+| `stagingNextBlocks` | its failure on staging-next stops others that build on master: `eval`, `evaluatedAt`, `packages`, `builds` |
+| `stagingNextBreaks` | builds on master but fails its own build on staging-next at the same version, in Hydra's newest evaluation of it (nixkeeper-hydra's `staging-next.json.gz`): `eval`, `evaluatedAt`, `builds` (`attr`, `system`, `build`: each failing job there), and `cycle` (`n`, `cut`: the open staging-next PR into master). A forecast: no count includes it |
 | `openPRs`, `openIssues` | how many open nixpkgs PRs and issues have `searchTerm` in their title |
 | `countedAt` | when those were last counted (left out: at `checkedAt`): daily, from a listing of all of nixpkgs' open PRs and issues (searched per package instead when that fails: then every 3 days for a package with none open and not outdated) |
 
@@ -357,7 +363,15 @@ behind the newest devel version elsewhere (`refVersion`).
 branch it targets), and `from` / `to` (the versions in its title,
 `name: from -> to`), and for `masterPR` from nixkeeper-prs, `author` and
 `mergedBy` (who opened and merged it: an update's fix is credited to
-them). `openPR` also has `facts` (the full row only), what
+them). `stagingPR` has `on` too (`staging` or `staging-next`: where it is),
+`merged` (when), and on staging-next, `cycle` (`n`, `cut`: the open
+staging-next PR into master it arrives with, cut from staging that day),
+and how it builds there, from Hydra's newest evaluation of staging-next
+(nixkeeper-hydra's `staging-next.json.gz`): `eval` (`eval`, `evaluatedAt`),
+`inEval` (false: merged since that evaluation), and `builds` (`system`,
+`status`, `build`: each platform's job at the PR's version, or at a newer
+one when staging-next has moved past it: then `evalVersion`, that version).
+`openPR` also has `facts` (the full row only), what
 nixkeeper-prs found of it: `fixesBuild` (it touches the package while its
 build fails on Hydra: then not in `fixPRs` too), `mergeBot` (`ready`: a maintainer can merge
 it with the merge bot, CI green and no conflict; `eligible`: once those

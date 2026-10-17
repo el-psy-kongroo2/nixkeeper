@@ -12,7 +12,7 @@ The page keeps every view in its address, so these are links to share:
 - [A maintainer's packages](https://nixkeeper.com/?maintainer=handle): `?maintainer=<GitHub handle>`; `none` for packages without one
 - [A team's packages](https://nixkeeper.com/?team=gaming): `?team=<team shortName>`, any case
 - [What needs attention](https://nixkeeper.com/?view=attention): failing, outdated, vulnerable or with a fix to backport, worst first
-- Narrowing any list: `?buildFailed=<reason>`, `?updateFailed=<reason>`, `?age=1m|6m|1y|2y|3y|never`, `?platform=linux|x86_64-linux|aarch64-linux|darwin`, `?refine=unmaintained,notbroken,notonmaster,nobot`
+- Narrowing any list: `?buildFailed=<reason>`, `?updateFailed=<reason>`, `?age=1m|6m|1y|2y|3y|never`, `?platform=linux|x86_64-linux|aarch64-linux|darwin`, `?refine=unmaintained,notbroken,notonmaster,nobot,stagingnext` (stagingnext: builds on master, fails its own build on staging-next)
 - [Reading the page](https://github.com/nixkeeper/nixkeeper/blob/main/docs/reading-the-page.md): what every dot, badge, panel and filter means
 
 ## Data for programs
@@ -38,6 +38,7 @@ The sources nixkeeper joins, each refreshed on its own, each README describing i
 
 ## Optional
 
+- [nixkeeper-mcp](https://github.com/nixkeeper/nixkeeper-mcp): an MCP server answering these questions from the same data, with tools for one package, what needs attention, build failures, PRs, issues, update attempts and CVEs (`nix run github:nixkeeper/nixkeeper-mcp`; read-only, no key)
 - [Source code](https://github.com/nixkeeper/nixkeeper): the sync, the page, a NixOS and nix-darwin module, a command to run your own
 - [A dashboard of your own](https://github.com/nixkeeper/nixkeeper/blob/main/docs/your-own-instance.md), and [a live one](https://demo.nixkeeper.com/) tracking only its lists
 - [Get notified](https://github.com/nixkeeper/nixkeeper/blob/main/docs/notifications.md): a GitHub status issue per maintainer or team

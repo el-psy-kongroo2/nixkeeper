@@ -326,6 +326,14 @@ const REFINES = {
     title: 'Leave out outdated packages whose update is merged, waiting for nixos-unstable',
     test: (p) => !waitingForChannel(p),
   },
+  // A forecast (branches.apply_staging_next_breaks): builds on master,
+  // fails its own build on staging-next at the same version.
+  stagingnext: {
+    label: 'Breaks on staging-next',
+    title:
+      'Only packages that build on master but fail their own build on staging-next, at the same version: unless fixed, they fail on master when staging-next is merged into it',
+    test: (p) => Boolean(p.stagingNextBreaks),
+  },
   // Where a person is needed: nixpkgs-update won't open the PR.
   nobot: {
     label: "Bot won't update it",
@@ -468,10 +476,12 @@ const badge = (cls, text, title, pr) =>
     ? html` <a class="badge ${cls}" href="${safeUrl(pr.url)}" target="_blank" rel="noopener" title="${title}">${text}</a>`
     : html` <span class="badge ${cls}" title="${title}">${text}</span>`;
 
-// The update's badge: on master when that's all it waits for, else its PR,
-// else the branch that has it (haskell-updates), waiting for its merge.
+// The update's badge: on master when that's all it waits for, else merged
+// into staging or staging-next on its way there, else its PR, else the
+// branch that has it (haskell-updates), waiting for its merge.
 function prBadge(pkg) {
   if (waitingForChannel(pkg)) return masterBadge(pkg);
+  if (pkg.stagingPR) return stagingBadge(pkg);
   if (pkg.openPR) return openPrBadge(pkg);
   return onBranch(pkg) ? branchBadge(pkg) : '';
 }
@@ -514,6 +524,106 @@ function branchNote(pkg) {
           ? ': it breaks when the branch merges into master, unless fixed first.'
           : '.';
   return html`<div class="master-note"><span class="mono">${b.name}</span> has <span class="mono">${b.version}</span>, which ${BRANCH_BUILD[b.status] || b.status} there (<a class="files-link" href="${safeUrl(hydraBuildUrl(b.build))}" target="_blank" rel="noopener">build ↗</a>)${after}</div>`;
+}
+
+// Where an update merged into staging or staging-next is, and what it waits
+// for: staging-next's merge into master (about every two to three weeks),
+// or before that, the next staging-next.
+function stagingWait(pr) {
+  return pr.on === 'staging-next'
+    ? `reaches master when staging-next is merged into it${pr.cycle ? ` (#${pr.cycle.n}, open since ${shortDay(pr.cycle.cut.slice(0, 10))})` : ''}`
+    : 'goes to staging-next when the next one is cut from staging, then to master with it';
+}
+
+function stagingBadge(pkg) {
+  const pr = pkg.stagingPR;
+  return badge(
+    'onmaster',
+    `on ${pr.on}`,
+    `${pr.on} has ${pr.to}: merged in #${pr.number} (${pr.title}); it ${stagingWait(pr)}. A mass rebuild's way: weeks, not days`,
+    pr,
+  );
+}
+
+// How an update on staging-next builds there, from Hydra's newest
+// evaluation of it (branches.apply_staging_next): built everywhere, failing
+// where (each failure's build linked), not built yet, or not in that
+// evaluation yet. Said with the evaluation's day: it's a day or two old.
+const STAGING_BUILD = {
+  failed: 'fails to build',
+  dependency: 'fails: a dependency fails',
+};
+function stagingBuilds(pr) {
+  if (!pr.eval) return '';
+  const when = pr.eval.evaluatedAt ? ` of ${shortDay(pr.eval.evaluatedAt.slice(0, 10))}` : '';
+  const evalLink = html`<a class="files-link" href="https://hydra.nixos.org/eval/${pr.eval.eval}" target="_blank" rel="noopener">Hydra's evaluation${when} ↗</a>`;
+  if (!pr.inEval) return html` It isn't in ${evalLink} yet.`;
+  const builds = pr.builds || [];
+  // staging-next past this PR's version: what it builds is that one.
+  const it = pr.evalVersion
+    ? html`staging-next has a newer version, <span class="mono">${pr.evalVersion}</span>, which`
+    : 'it';
+  const failing = builds.filter((b) => STAGING_BUILD[b.status]);
+  if (failing.length)
+    return html` In ${evalLink}, ${it} ${failing.map(
+      (b, i) =>
+        html`${i ? (i === failing.length - 1 ? ' and ' : ', ') : ''}${STAGING_BUILD[b.status]} on ${b.system} (<a class="files-link" href="${safeUrl(hydraBuildUrl(b.build))}" target="_blank" rel="noopener">build ↗</a>)`,
+    )}.`;
+  const waiting = builds.filter((b) => b.status !== 'ok');
+  if (waiting.length)
+    return html` In ${evalLink}, ${it} isn't built yet on ${waiting.map((b) => b.system).join(', ')}.`;
+  return html` In ${evalLink}, ${it} builds${builds.length > 1 ? ' on every platform' : ''}.`;
+}
+
+// What staging-next breaks: this package, building on master, fails its own
+// build there (each platform's build linked), as of Hydra's newest
+// evaluation of it.
+function stagingNextBreaksNote(pkg) {
+  const b = pkg.stagingNextBreaks;
+  if (!b) return '';
+  const when = b.evaluatedAt ? ` of ${shortDay(b.evaluatedAt.slice(0, 10))}` : '';
+  const evalLink = html`<a class="files-link" href="https://hydra.nixos.org/eval/${b.eval}" target="_blank" rel="noopener">Hydra's evaluation${when} ↗</a>`;
+  const systems = [...new Set(b.builds.map((x) => x.system))];
+  const builds = b.builds.map(
+    (x, i) =>
+      html`${i ? ', ' : ''}<a class="files-link" href="${safeUrl(hydraBuildUrl(x.build))}" target="_blank" rel="noopener">${b.builds.length > systems.length ? `${x.attr} on ` : ''}${x.system} ↗</a>`,
+  );
+  const merge = b.cycle
+    ? html` (<a class="files-link" href="https://github.com/NixOS/nixpkgs/pull/${b.cycle.n}" target="_blank" rel="noopener">#${b.cycle.n} ↗</a>)`
+    : '';
+  return html`<div class="master-note">⚠ Breaks on <span class="mono">staging-next</span>: in ${evalLink}, it fails to build there (${builds}), at the same version master builds fine. Unless fixed, it fails on master when staging-next is merged into it${merge}; a fix may already be on staging.</div>`;
+}
+
+// On staging-next, this package stops others (a failing dependency there),
+// or is stopped there by one, as of Hydra's newest evaluation of it.
+function stagingNextBlockedNote(pkg) {
+  const notes = [];
+  const evalOf = (x) =>
+    html`<a class="files-link" href="https://hydra.nixos.org/eval/${x.eval}" target="_blank" rel="noopener">Hydra's evaluation${x.evaluatedAt ? ` of ${shortDay(x.evaluatedAt.slice(0, 10))}` : ''} ↗</a>`;
+  const blocks = pkg.stagingNextBlocks;
+  if (blocks)
+    notes.push(
+      html`<div class="master-note">⚠ On <span class="mono">staging-next</span>, its failure stops ${fmt(blocks.packages)} other ${blocks.packages === 1 ? "package's" : "packages'"} builds (${fmt(blocks.builds)} ${blocks.builds === 1 ? 'build' : 'builds'}, in ${evalOf(blocks)}) that build on master: fixing it there unblocks them before staging-next is merged.</div>`,
+    );
+  const blocked = pkg.stagingNextBlockedBy;
+  if (blocked) {
+    const by = [...new Map(blocked.builds.flatMap((b) => b.by).map((x) => [x.name, x])).values()];
+    const names = by.map(
+      (x, i) =>
+        html`${i ? ', ' : ''}${x.row ? html`<a class="files-link mono" href="${scopeHref({ pkg: x.name })}" data-scope-pkg="${x.name}">${x.name}</a>` : html`<span class="mono">${x.name}</span>`}`,
+    );
+    const systems = [...new Set(blocked.builds.map((b) => b.system))].join(', ');
+    notes.push(
+      html`<div class="master-note">On <span class="mono">staging-next</span>, its build (${systems}) is stopped by ${names}, failing there, in ${evalOf(blocked)}; it builds on master. Unless that's fixed, it's stopped on master too when staging-next is merged.</div>`,
+    );
+  }
+  return notes;
+}
+
+function stagingNote(pkg) {
+  const pr = pkg.stagingPR;
+  if (!pr) return '';
+  return html`<div class="master-note"><span class="mono">${pr.on}</span> already has <span class="mono">${pr.to}</span> (merged in <a class="files-link" href="${safeUrl(pr.url)}" target="_blank" rel="noopener">#${pr.number} ↗</a>${pr.merged ? ` on ${longDate(pr.merged)}` : ''}): it ${stagingWait(pr)}.${stagingBuilds(pr)}</div>`;
 }
 
 function masterBadge(pkg) {
@@ -562,7 +672,7 @@ const BOT_ICON = raw(
 function queuedTag(pkg) {
   const st = computeStatus(pkg);
   const to = queuedTo(pkg);
-  if (pkg.openPR || waitingForChannel(pkg)) return '';
+  if (pkg.openPR || pkg.stagingPR || waitingForChannel(pkg)) return '';
   const target = st === 'warn' ? targetVersion(pkg) : null;
   let match = false;
   let title;
@@ -1837,8 +1947,26 @@ function blockersHtml() {
             : raw('<span class="hl-row">')
         }<span class="status-dot missing" aria-hidden="true"></span><span class="hl-name mono">${name}</span><span class="hl-age" title="Stops ${fmt(packages)} ${packages === 1 ? 'package' : 'packages'} (${fmt(builds)} ${builds === 1 ? 'build' : 'builds'})">stops ${fmt(packages)}</span>${raw(isRow ? '</a>' : '</span>')}</li>`,
     )}</ol>
+    ${stagingNextBlockersHtml(b.stagingNext)}
     <a class="hl-all" href="${scopeHref({ view: 'blocked' })}" data-card-view="blocked">Show all ${fmt(b.packages)} <span aria-hidden="true">→</span></a>
   </section>`;
+}
+
+// The same on staging-next, before its merge into master (the manifest's
+// blockers.stagingNext, branches.apply_staging_next_blocked): the failing
+// dependencies there stopping the most packages that build on master.
+function stagingNextBlockersHtml(sn) {
+  if (!sn?.top?.length) return '';
+  const when = sn.evaluatedAt
+    ? ` (Hydra's evaluation of ${shortDay(sn.evaluatedAt.slice(0, 10))})`
+    : '';
+  const shown = sn.top
+    .slice(0, 3)
+    .map(
+      ([name, isRow, packages], i) =>
+        html`${i ? ' · ' : ''}${isRow ? html`<a class="files-link mono" href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}">${name}</a>` : html`<span class="mono">${name}</span>`} stops ${fmt(packages)}`,
+    );
+  return html`<p class="hl-sub" title="Failing dependencies on staging-next stop ${fmt(sn.packages)} packages that build on master${when}: unless fixed there, they're stopped on master too when staging-next is merged">On staging-next, ${fmt(sn.packages)} stopped: ${shown}</p>`;
 }
 
 // Days of history the cards draw, and how many points before they do.
@@ -3406,7 +3534,9 @@ function fillDetail(pkg, el, entries) {
                   : st === 'warn' && fromMaster(pkg)
                     ? ` — the newest Repology and the update checks know of, but master already has a newer one${since.replace(' — ', '; ')}:`
                     : st === 'warn'
-                      ? html`, the newest seen elsewhere is <span class="mono" style="font-weight:600;color:var(--warn)">${pkg.refVersion || '?'}</span>${since}`
+                      ? pkg.refFromPR
+                        ? html`; Repology names no newer version, but an update PR brings <span class="mono" style="font-weight:600;color:var(--warn)">${pkg.refVersion}</span>${since}`
+                        : html`, the newest seen elsewhere is <span class="mono" style="font-weight:600;color:var(--warn)">${pkg.refVersion || '?'}</span>${since}`
                       : olderVersionKept(pkg)
                         ? html` — an older version nixpkgs keeps on purpose${pkg.keptBeside ? html`, beside <b class="mono">${pkg.keptBeside.attr}</b> <span class="mono">${pkg.keptBeside.version}</span>` : ', beside a newer one'}: not outdated while nothing newer is out in its own series.`
                         : st === 'neutral'
@@ -3555,7 +3685,7 @@ function fillDetail(pkg, el, entries) {
             : ', not in nixos-unstable yet.'
         }</div>`
       : ''
-  }${branchNote(pkg)}`;
+  }${waitingForChannel(pkg) ? '' : stagingNote(pkg)}${stagingNextBreaksNote(pkg)}${stagingNextBlockedNote(pkg)}${branchNote(pkg)}`;
   const people = [
     Array.isArray(pkg.maintainers) &&
       html`<section class="pd-sec"><h4 class="other-label">Maintainers</h4><div class="pd-pills">${

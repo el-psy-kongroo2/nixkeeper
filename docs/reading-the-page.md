@@ -62,7 +62,12 @@ list. From the top:
   Beside them, the failing packages **blocking the most** others: a build
   that fails because one of its dependencies did, as zh.fail counts them in
   all of nixpkgs (fix that one, and they all build again), and "show all"
-  for every package blocked (`?view=blocked`).
+  for every package blocked (`?view=blocked`). Under them, the same on
+  staging-next, before its merge into master: the dependencies failing
+  there that stop the most packages building on master (in Hydra's newest
+  evaluation of it, its day said). The panels of both say it too: "its
+  failure stops N other packages' builds on staging-next", "on
+  staging-next, its build is stopped by X".
 - **Why things fail**: failed builds grouped by the same error (the line of
   their log that says why, with paths, numbers and names left out: one
   cause, one fix pattern, like "Broken by the abseil-cpp update" or "Python
@@ -148,6 +153,7 @@ what's left.
 | **without maintainer** | packages with no maintainer | `?refine=unmaintained` |
 | **not marked broken** | failures nobody has marked yet | `?refine=notbroken` |
 | **not fixed on master yet** | outdated packages, leaving out those whose update is merged and waits for nixos-unstable | `?refine=notonmaster` |
+| **breaks on staging-next** | packages that build on master but fail their own build on staging-next, at the same version, in Hydra's newest evaluation of it (a day or two old): unless fixed, they fail on master when staging-next is merged into it. A forecast: no count includes it, and a fix may already be waiting on staging. The details link each failing build | `?refine=stagingnext` |
 | **bot won't update it** | outdated packages nixpkgs-update won't update by itself, so it takes someone: it can't, skips them on purpose, or has never tried them and they aren't in its queue; none with an update PR open or merged | `?refine=nobot` |
 | **not via a team** (on a maintainer's page) | see [teams](#maintainers-and-teams) | `?team=none` |
 | **build failed because** | build failures for one reason, as the build's log on Hydra says (read by nixkeeper-hydra): compile error, tests, link error, missing header, CMake 4 (it refuses projects asking for CMake older than 3.5), CMake, Python import, dependencies, build or metadata, writes to `$HOME`, hash, patch, download, out of disk (Hydra's side), other, and more; "not read yet" while nixkeeper-hydra catches up. Each with how many there are in the list, on the platform picked | `?buildFailed=cmake4` |
@@ -278,12 +284,15 @@ packages come longest first, as outdated ones do.
 
 At the right of the versions: beside nixpkgs' version, the badges
 about it (`devel`, `vulnerable`, ...); beside the newest, the update's
-(`PR #123`, `on master`, `check failing`):
+(`PR #123`, `on staging`, `on master`, `check failing`). When it's the
+version's only badge, it sits between the two versions, level with the
+PR and issue counts:
 
 | Badge | Means |
 |---|---|
 | `PR #123` (green) | an open update PR in nixpkgs; grey while it's a draft |
 | `on master` (violet) | the update is merged into master; links to its PR |
+| `on staging`, `on staging-next` (violet) | the update is merged into staging or staging-next, the branches mass rebuilds go through (libraries, compilers, curl, coreutils): it reaches master when staging-next is merged into it, about every two to three weeks; staging's goes to the next staging-next first. Links to its PR; the details say since when, which staging-next, and for staging-next's, how it builds there in Hydra's newest evaluation of it (a day or two old: its day is said). Still outdated until then |
 | `devel` | a development release, compared against other devel versions |
 | `insecure` | nixpkgs itself marks it insecure (`meta.knownVulnerabilities`): it won't build unless allowed; the details give nixpkgs' reasons, their CVEs linked |
 | `vulnerable` | vulnerable, says one or more of: the NixOS security tracker (a CVE affecting the package), OSV (an advisory listing its version), Repology; hovering says who, and how many CVEs. Red for critical or high severity, orange for medium, grey for low; the vulnerable list goes worst first. The details list each CVE: its severity, the verdict, the tracker's issue and its nixpkgs issue, and the release branches still affected (a fix to backport); the ones not counted (fixed, unconfirmed, dismissed) folded below |
