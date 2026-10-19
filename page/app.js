@@ -334,6 +334,13 @@ const REFINES = {
       'Only packages that build on master but fail their own build on staging-next, at the same version: unless fixed, they fail on master when staging-next is merged into it',
     test: (p) => Boolean(p.stagingNextBreaks),
   },
+  // Something open on GitHub about it: for a broken package, maybe its fix.
+  withpr: {
+    label: 'With an open PR',
+    title:
+      'Only packages an open PR touches: for one marked broken, maybe its fix (or moot: a person checks)',
+    test: (p) => (p.openPRs || 0) > 0,
+  },
   // Where a person is needed: nixpkgs-update won't open the PR.
   nobot: {
     label: "Bot won't update it",
@@ -670,9 +677,19 @@ const BOT_ICON = raw(
 // merged already (its badge says it). Like the cell's button, it opens the
 // update panel, which says when.
 function queuedTag(pkg) {
+  const q = queuedState(pkg);
+  return q
+    ? html`<button type="button" class="queued-tag${q.match ? ' match' : ''}" data-kind="update" aria-expanded="false" aria-label="Queued: ${q.title}" title="${q.title}">${BOT_ICON}</button>`
+    : '';
+}
+
+// Whether nixpkgs-update is set to try the package (queuedTag's robot):
+// { match: to the newest version, its last attempt fine, so its PR should
+// follow; title }, or null.
+function queuedState(pkg) {
   const st = computeStatus(pkg);
   const to = queuedTo(pkg);
-  if (pkg.openPR || pkg.stagingPR || waitingForChannel(pkg)) return '';
+  if (pkg.openPR || pkg.stagingPR || waitingForChannel(pkg)) return null;
   const target = st === 'warn' ? targetVersion(pkg) : null;
   let match = false;
   let title;
@@ -696,9 +713,22 @@ function queuedTag(pkg) {
     title =
       "nixpkgs-update will run its updateScript, which decides the version: whether it's the newest, its PR will tell. When: the update panel";
   } else {
-    return '';
+    return null;
   }
-  return html`<button type="button" class="queued-tag${match ? ' match' : ''}" data-kind="update" aria-expanded="false" aria-label="Queued: ${title}" title="${title}">${BOT_ICON}</button>`;
+  return { match, title };
+}
+
+// "auto update in 4 days": when nixpkgs-update is set to update the package
+// to the newest version (the green robot) and the queue says when, the
+// update cell's text instead of "—" (nothing reported). Days from its
+// expected day (queued.by), as the update panel's "Next attempt" counts.
+function botDueText(pkg) {
+  const by = pkg.queued?.by;
+  if (!by || !queuedState(pkg)?.match) return null;
+  const days = daysUntil(by);
+  return days < 1
+    ? 'auto update within a day'
+    : `auto update in ${days === 1 ? 'a day' : `${days} days`}`;
 }
 
 // The version column: the versions on the left, badges on the right (so
@@ -1018,11 +1048,29 @@ const SOURCES = [
     says: () => '',
     instead: 'the rest of the sync went on',
   },
-  { key: 'hydra', digest: 'hydra', label: 'Builds', says: hydraEval },
+  {
+    // Hydra's nixpkgs/trunk jobset: master, which the channels follow.
+    key: 'hydra',
+    digest: 'hydra',
+    label: 'master',
+    from: 'https://hydra.nixos.org/jobset/nixpkgs/trunk',
+    says: hydraEval,
+  },
+  {
+    // Only the jobs that differ from master's (nixkeeper/sources/branches.py),
+    // and only while its cycle isn't merged yet.
+    key: 'branch:staging-next',
+    digest: 'hydra',
+    label: 'staging-next',
+    from: 'https://hydra.nixos.org/jobset/nixpkgs/staging-next',
+    says: (s) => html`${hydraEval(s)}, ${s.jobs?.toLocaleString()} jobs differing from master`,
+    instead: 'not shown until its next evaluation',
+  },
   {
     key: 'branch:haskell-updates',
     digest: 'hydra',
     label: 'haskell-updates',
+    from: 'https://hydra.nixos.org/jobset/nixpkgs/haskell-updates',
     says: hydraEval,
     instead: 'not shown',
   },
@@ -1118,6 +1166,7 @@ const SOURCES = [
         `made ${timeAgo(s.at)}`,
         s.prs != null && `${s.prs.toLocaleString()} open PRs, ${s.issues?.toLocaleString()} issues`,
         s.merged != null && `${s.merged.toLocaleString()} merged since the channel`,
+        s.staging != null && `${s.staging.toLocaleString()} merged into staging or staging-next`,
         s.partly && `${s.partly}: listed during the sync`,
       ]
         .filter(Boolean)
@@ -1154,12 +1203,12 @@ function sourcesHtml() {
   const digests = Object.entries(DIGESTS).map(([digest, url]) => {
     const mine = shown.filter((src) => src.digest === digest);
     return mine.length
-      ? html`<li class="src-digest"><a class="files-link" href="${url}" target="_blank" rel="noopener">nixkeeper-${digest}</a></li>${mine.map(row)}`
+      ? html`<li class="src-digest"><a class="files-link" href="${url}" target="_blank" rel="noopener">${url.split('/').pop()}</a></li>${mine.map(row)}`
       : '';
   });
   return html`<p class="pop-title">Where the data is from</p>
     <ul>
-      <li><b>Daily sync</b><span title="${checkedAt ? when(checkedAt) : ''}">${checkedAt ? `${timeAgo(checkedAt)}, ${when(checkedAt)}` : 'not yet'}</span></li>
+      <li><b>Last sync</b><span title="${checkedAt ? when(checkedAt) : ''}">${checkedAt ? `${timeAgo(checkedAt)}, ${when(checkedAt)}` : 'not yet'}</span></li>
       <li><b>Hourly checks</b><span>frequent update checks and update PRs, between syncs</span></li>
       ${own}
       ${digests}
@@ -1308,6 +1357,98 @@ function loadMaintainers() {
     .catch(() => {
       maintainersLoading = null; // tried again with the next search
     });
+}
+
+// views/merge.json: the PRs maintainers can merge now with the merge bot
+// (nixkeeper/sources/prs_digest.py: mergeable), for "You can merge these" in
+// a maintainer's or team's view. Loaded once, when one is first shown.
+let mergeList = null;
+let mergeLoading = null;
+let mergeAll = false; // every one shown, not the first MERGE_SHOWN
+const MERGE_SHOWN = 5;
+const MERGE_COMMAND = '@NixOS/nixpkgs-merge-bot merge';
+function loadMerge() {
+  if (mergeLoading) return;
+  mergeLoading = fetch(dataUrl('views/merge.json'), { cache: 'no-store' })
+    .then((res) => (res.ok ? res.json() : { prs: [] }))
+    .then((data) => {
+      mergeList = data.prs || [];
+      update({ keepPage: true });
+    })
+    .catch(() => {
+      mergeLoading = null; // tried again with the next view
+    });
+}
+
+// "You can merge these": in @handle's view, the PRs they can merge (their
+// own first); in a team's, those touching the packages nixpkgs lists under
+// the team (meta.teams: its members are their maintainers, so the merge bot
+// counts them), not those a list of the same name adds (teamsByList: their
+// own maintainers merge those), with who can. Nothing when there are none,
+// or before views/merge.json is in.
+function mergeHtml(path, handle) {
+  const mine = path.startsWith('views/maintainer/') && handle && handle !== 'none';
+  const team = path.startsWith('views/team/');
+  if (!mine && !team) return '';
+  if (!mergeList) {
+    loadMerge();
+    return '';
+  }
+  const who = handle.toLowerCase();
+  const theirs = team && teamName();
+  const names = team
+    ? new Set(packages.filter((p) => !p.teamsByList?.includes(theirs)).map((p) => p.name))
+    : null;
+  const own = (p) => mine && p.author.toLowerCase() === who;
+  // Their own first, then those for a vulnerable package, then the
+  // longest waiting (the list's own order).
+  const prs = mergeList
+    .filter((p) =>
+      mine ? p.who.some((w) => w.toLowerCase() === who) : p.packages.some((n) => names.has(n)),
+    )
+    .sort((a, b) => own(b) - own(a) || Boolean(b.vulnerable) - Boolean(a.vulnerable));
+  if (!prs.length) return '';
+  const shown = mergeAll ? prs : prs.slice(0, MERGE_SHOWN);
+  const days = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000));
+  const waited = (iso) => {
+    const d = days(iso);
+    return d < 1 ? 'opened today' : `waiting ${d} day${d === 1 ? '' : 's'}`;
+  };
+  const people = (list) => list.map((h) => `@${h}`).join(', ');
+  const line = (p) => {
+    const facts = [
+      own(p) ? html`<b>your own PR</b>` : `by @${p.author}`,
+      html`<span title="Opened ${new Date(p.created).toLocaleDateString()}">${waited(p.created)}</span>`,
+      p.base !== 'master' && html`into <span class="mono">${p.base}</span>`,
+      p.approvedBy?.length && `approved by ${people(p.approvedBy)}`,
+      p.vulnerable &&
+        html`<span class="merge-warn" title="The package counts as vulnerable: worth reviewing this first">for a vulnerable package</span>`,
+      p.behind &&
+        html`<span class="merge-warn" title="Merged as it is, the package would still be outdated: worth updating the PR first">behind: upstream has ${p.behind}</span>`,
+      team && `${people(p.who)} can merge it`,
+    ].filter(Boolean);
+    return html`<li><a class="files-link" href="https://github.com/NixOS/nixpkgs/pull/${p.number}" target="_blank" rel="noopener">${p.title}</a> <span class="merge-n">#${p.number}</span><span class="merge-facts">${facts.map((f, i) => html`${i ? ' · ' : ''}${f}`)}</span></li>`;
+  };
+  const what = mine
+    ? html`You can merge ${prs.length === 1 ? 'this PR' : html`these ${fmt(prs.length)} PRs`}`
+    : html`${fmt(prs.length)} PR${prs.length === 1 ? '' : 's'} on the team's packages, ready to merge`;
+  // The merge bot also asks that whoever comments be in
+  // @NixOS/nixpkgs-maintainers (nixpkgs' ci/README.md): not public, so said.
+  const why = mine
+    ? 'CI passed, and you maintain every package it touches: if you’re in @NixOS/nixpkgs-maintainers, the merge bot merges it for you'
+    : 'CI passed, and the people named under each maintain every package it touches: the merge bot merges it for any of them in @NixOS/nixpkgs-maintainers';
+  const more =
+    prs.length > MERGE_SHOWN
+      ? html`<button type="button" class="merge-more">${mergeAll ? 'Show fewer' : `Show all ${fmt(prs.length)}`}</button>`
+      : '';
+  return html`<section class="merge-block" aria-labelledby="mergeHead">
+    <h3 id="mergeHead">${what} <span class="scope-hint">${why}</span></h3>
+    <ul class="merge-list">${shown.map(line)}</ul>
+    ${more}
+    <p class="merge-how">Review it, then comment on the PR: <code>${MERGE_COMMAND}</code>
+      <button type="button" class="merge-copy" data-copy="${MERGE_COMMAND}" title="Copy the comment">Copy</button>
+      <a class="files-link" href="https://github.com/NixOS/nixpkgs/blob/master/ci/README.md" target="_blank" rel="noopener">how the merge bot works ↗</a></p>
+  </section>`;
 }
 
 function loadNames() {
@@ -1822,7 +1963,12 @@ const HIGHLIGHTS = [
   { key: 'outdated', label: 'Outdated', filter: 'warn', color: 'var(--warn)' },
   { key: 'updateFailing', label: 'Update failures', filter: 'updates', color: 'var(--caution)' },
 ];
-const highlightShown = { failing: 'newest', outdated: 'newest', updateFailing: 'newest' };
+const highlightShown = {
+  failing: 'newest',
+  outdated: 'newest',
+  updateFailing: 'newest',
+  blockers: 'master',
+};
 
 function highlightsHtml() {
   const found = manifest.highlights;
@@ -1853,10 +1999,6 @@ function highlightsHtml() {
     <div class="hl-cols">${columns}${blockersHtml()}</div>`;
 }
 
-// The failing dependencies that stop the most packages' builds (the
-// manifest's blockers, from nixkeeper-hydra's blockedBy): fix one, and
-// they all build again. Of all of nixpkgs, as zh.fail counts them; not
-// with data from before, or before the digest has read any.
 // Why things fail, across packages (the manifest's causes, nixkeeper's
 // causes.py): failed builds grouped by the same error (a friendly title
 // where the pattern is known, else the error line), each opening its
@@ -1931,42 +2073,51 @@ function causesHtml() {
     <div class="hl-cols">${groups}${reasons}</div>`;
 }
 
+// "Blocking the most": the failing dependencies stopping the most packages'
+// builds (nixkeeper-hydra's blockedBy: fix one, and they all build again;
+// of all of nixpkgs, as zh.fail counts them; not with data from before, or
+// before the digest has read any), on master (the manifest's blockers) or,
+// while Hydra has evaluated
+// the current cycle, on staging-next before its merge (blockers.stagingNext,
+// branches.apply_staging_next_blocked), switched in its header as the other
+// lists switch newest and oldest: one list, one height, the cards aligned.
 function blockersHtml() {
   const b = manifest.blockers;
-  if (!b?.count) return '';
+  const sn = b?.stagingNext?.top?.length ? b.stagingNext : null;
+  if (!b?.count && !sn) return '';
+  const onNext = sn && highlightShown.blockers === 'stagingNext';
+  const shown = onNext ? sn : b;
+  const toggle = (m, text, title) =>
+    html`<button type="button" class="hl-mode" data-hl="blockers" data-mode="${m}" aria-pressed="${(onNext ? 'stagingNext' : 'master') === m}" title="${title}">${text}</button>`;
+  const when = sn?.evaluatedAt
+    ? ` (Hydra's evaluation of ${shortDay(sn.evaluatedAt.slice(0, 10))})`
+    : '';
+  const title = onNext
+    ? `On staging-next${when}, ${fmt(sn.count)} failing dependencies stop ${fmt(sn.packages)} packages that build on master: unless fixed there, they're stopped on master too when staging-next is merged`
+    : `${fmt(b.count)} failing dependencies stop ${fmt(b.packages)} packages' builds, in all of nixpkgs`;
   return html`<section class="hl-card" style="--hl:var(--danger)" aria-label="Blocking the most">
     <div class="hl-head">
-      <h3 class="hl-title" title="${fmt(b.count)} failing dependencies stop ${fmt(b.packages)} packages' builds, in all of nixpkgs"><span class="hl-label">Blocking the most</span><span class="hl-n">${fmt(b.packages)}</span></h3>
-      <span class="hl-unit">packages stopped</span>
+      <h3 class="hl-title" title="${title}"><span class="hl-label">Blocking the most</span><span class="hl-n">${fmt(shown.packages)}</span></h3>
+      ${
+        sn
+          ? html`<div class="hl-modes" role="group" aria-label="Blocking the most: on">${toggle('master', 'Master', 'On master, now')}${toggle('stagingNext', 'Next', 'On staging-next, before its merge into master')}</div>`
+          : html`<span class="hl-unit">packages stopped</span>`
+      }
     </div>
-    <ol class="hl-list">${b.top.map(
+    <ol class="hl-list">${shown.top.map(
       ([name, isRow, packages, builds]) =>
         html`<li>${
           isRow
             ? html`<a class="hl-row" href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}">`
             : raw('<span class="hl-row">')
-        }<span class="status-dot missing" aria-hidden="true"></span><span class="hl-name mono">${name}</span><span class="hl-age" title="Stops ${fmt(packages)} ${packages === 1 ? 'package' : 'packages'} (${fmt(builds)} ${builds === 1 ? 'build' : 'builds'})">stops ${fmt(packages)}</span>${raw(isRow ? '</a>' : '</span>')}</li>`,
+        }<span class="status-dot missing" aria-hidden="true"></span><span class="hl-name mono">${name}</span><span class="hl-age" title="Stops ${fmt(packages)} ${packages === 1 ? 'package' : 'packages'} (${fmt(builds)} ${builds === 1 ? 'build' : 'builds'})${onNext ? ' on staging-next' : ''}">stops ${fmt(packages)}</span>${raw(isRow ? '</a>' : '</span>')}</li>`,
     )}</ol>
-    ${stagingNextBlockersHtml(b.stagingNext)}
-    <a class="hl-all" href="${scopeHref({ view: 'blocked' })}" data-card-view="blocked">Show all ${fmt(b.packages)} <span aria-hidden="true">→</span></a>
+    ${
+      onNext
+        ? html`<p class="hl-all hl-when" title="${title}">On staging-next${sn.evaluatedAt ? `, evaluated ${shortDay(sn.evaluatedAt.slice(0, 10))}` : ''}</p>`
+        : html`<a class="hl-all" href="${scopeHref({ view: 'blocked' })}" data-card-view="blocked">Show all ${fmt(b.packages)} <span aria-hidden="true">→</span></a>`
+    }
   </section>`;
-}
-
-// The same on staging-next, before its merge into master (the manifest's
-// blockers.stagingNext, branches.apply_staging_next_blocked): the failing
-// dependencies there stopping the most packages that build on master.
-function stagingNextBlockersHtml(sn) {
-  if (!sn?.top?.length) return '';
-  const when = sn.evaluatedAt
-    ? ` (Hydra's evaluation of ${shortDay(sn.evaluatedAt.slice(0, 10))})`
-    : '';
-  const shown = sn.top
-    .slice(0, 3)
-    .map(
-      ([name, isRow, packages], i) =>
-        html`${i ? ' · ' : ''}${isRow ? html`<a class="files-link mono" href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}">${name}</a>` : html`<span class="mono">${name}</span>`} stops ${fmt(packages)}`,
-    );
-  return html`<p class="hl-sub" title="Failing dependencies on staging-next stop ${fmt(sn.packages)} packages that build on master${when}: unless fixed there, they're stopped on master too when staging-next is merged">On staging-next, ${fmt(sn.packages)} stopped: ${shown}</p>`;
 }
 
 // Days of history the cards draw, and how many points before they do.
@@ -2270,6 +2421,7 @@ function listHeaderHtml() {
       ${path.startsWith('views/set/') ? html`<span class="scope-hint">${bulkText(setFilter)}${profileOf(setFilter) ? html` (<a class="files-link" href="${safeUrl(profileOf(setFilter).link)}" target="_blank" rel="noopener">in nixpkgs ↗</a>)` : ''}</span>` : ''}
       ${teamPicker('Any team')}${teamOutChips()}
     </div>
+    ${mergeHtml(path, handle)}
     ${
       // One package: its row says it all, the tiles would only count to 1.
       path.startsWith('pkg:') ? '' : html`<div class="tiles">${tiles}</div>${refineHtml()}`
@@ -2722,6 +2874,16 @@ function updateStatus(pkg) {
   if (pkg.unread?.includes('update') && !pkg.update) return button('neutral', 'not read', true);
   if (pkg.update === null && pkg.unversioned)
     return html`<span class="failure-na" title="${UNVERSIONED_TITLE}: nothing for nixpkgs-update to update">—</span>`;
+  // Nothing reported, and the bot is set to update it: when, in green.
+  const due = botDueText(pkg);
+  if (due)
+    return failureButton(
+      'update',
+      'ok',
+      html`<span class="bot-due">${due}</span>`,
+      `${queuedState(pkg).title.replace(/\. When: the update panel$/, '')}, expected by ${pkg.queued.by}`,
+      notRefreshed(pkg, 'update'),
+    );
   if (pkg.update === null) return button('neutral', 'not attempted', true);
   return button('ok', 'none reported', true);
 }
@@ -3239,6 +3401,11 @@ function githubSection(pkg) {
   const fact = (kind, text, title) =>
     html`<span class="gh-fact ${kind}"${title ? html` title="${title}"` : ''}>${text}</span>`;
   const lines = [];
+  // Marked broken with open PRs: one may fix it, or be moot now.
+  if (pkg.markedBroken && pkg.openPRs > 0)
+    lines.push(
+      html`<li>${fact('warn', `marked broken, and ${pkg.openPRs === 1 ? 'an open PR touches' : `${fmt(pkg.openPRs)} open PRs touch`} it`, 'One may fix it, or be moot while it stays broken: worth a look before reviewing it')}</li>`,
+    );
   const pr = pkg.openPR;
   const f = pr?.facts;
   if (f) {
@@ -3262,6 +3429,18 @@ function githubSection(pkg) {
           'The merge bot could merge it once CI is green and any conflict is sorted out',
         ),
       f.state && fact('warn', (PR_STATES[f.state] || (() => f.state))(f.now || '?')),
+      f.behind &&
+        fact(
+          'warn',
+          `behind: upstream has ${f.behind}`,
+          'Merged as it is, the package would still be outdated: worth updating the PR first',
+        ),
+      f.vulnerable &&
+        fact(
+          'warn',
+          'for a vulnerable package',
+          'The package counts as vulnerable (see its vulnerabilities): worth reviewing this PR first, and checking whether its version fixes them',
+        ),
       f.blocksBot &&
         fact(
           'warn',
@@ -3318,6 +3497,12 @@ function githubSection(pkg) {
     done: (c) => fact('ok', `nixpkgs has ${c.now || 'it'}: a candidate to close`),
     partly: (c) =>
       fact('warn', `nixpkgs moved to ${c.now || 'a newer version'}, not to the one asked`),
+    cveFixed: (c) =>
+      fact(
+        'ok',
+        `${c.cves?.length > 1 ? 'none of its CVEs affect' : "its CVE doesn't affect"} nixpkgs' version: a candidate to close`,
+        `${(c.cves || []).join(', ')}: fixed or patched, as nixkeeper reads the security tracker and OSV against nixpkgs' version. Check before closing`,
+      ),
   };
   for (const c of pkg.issueChecks || [])
     lines.push(html`<li>${link(c)} ${c.title} ${(ISSUE[c.verdict] || (() => c.verdict))(c)}</li>`);
@@ -3894,6 +4079,16 @@ document.getElementById('scope')?.addEventListener('click', (e) => {
   const mode = e.target.closest('button.hl-mode');
   if (mode) {
     highlightShown[mode.dataset.hl] = mode.dataset.mode;
+    renderScope();
+    return;
+  }
+  const copy = e.target.closest('button.merge-copy');
+  if (copy) {
+    copyTitle(copy);
+    return;
+  }
+  if (e.target.closest('button.merge-more')) {
+    mergeAll = !mergeAll;
     renderScope();
     return;
   }

@@ -11,6 +11,37 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Added
 
+- An issue about CVEs that none affect nixpkgs' version, as nixkeeper reads
+  them (fixed or patched), is a candidate to close in the package's panel,
+  beside the build and update checks (4 of the 17 open CVE issues on
+  2026-10-18, crewai's and urllib3's among them).
+- A package marked broken with open PRs says so in its panel (one may fix
+  it, or be moot), and **With an open PR** (`?refine=withpr`) keeps only
+  packages an open PR touches: with Marked broken, 49 on 2026-10-18.
+- An update PR **behind** upstream ("behind: upstream has 7.3.2": merged,
+  the package would still be outdated) or **for a vulnerable package**
+  (worth reviewing first) says so, in the package's panel and in "You can
+  merge these", where those for a vulnerable package come right after the
+  maintainer's own. On 2026-10-18, 582 packages' update PRs were behind
+  and 110 were for a vulnerable package; of the PRs ready to merge, 44 and
+  11. Worked out by the sync from its versions and vulnerabilities
+  (`prs_digest.cross_check`), again in the hourly checks.
+- "You can merge these" on a maintainer's page: the open PRs they can merge
+  themselves with nixpkgs' merge bot (CI green, merge-bot eligible, they
+  maintain every package it touches), their own first, then the longest
+  waiting, with the comment to post and a button to copy it (the merge bot
+  also asks that they be in @NixOS/nixpkgs-maintainers). On a team's
+  page, those on the packages nixpkgs lists under the team (`meta.teams`,
+  not a list of the same name), with who can merge each. On
+  2026-10-18, 479 PRs, for 499 maintainers; 87 waiting over three months.
+  "CI passed" is nixpkgs CI's own verdict (its `no PR failures` status), as
+  the merge bot reads it, once nixkeeper-prs has it: not every check's,
+  which ofborg's, queued for weeks, kept pending for 526 more.
+  From nixkeeper-prs' digest (`views/merge.json`).
+- start-runs also starts [nixkeeper/status](https://github.com/nixkeeper/status)'
+  hourly check, which says on a page whether every workflow, digest and
+  token is on time and opens an issue for what needs attention (its token
+  needs the status repository too).
 - What blocks staging-next: a dependency failing there that stops packages
   building on master says how many in its details ("its failure stops N
   other packages' builds on staging-next"), a package it stops says which
@@ -25,7 +56,35 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   nixkeeper's data: one package's state, what needs attention for a
   maintainer or a team, build failures, PRs, issues, update attempts, CVEs.
 
+
+### Changed
+
+- When nixpkgs-update is set to update a package to the newest version (the
+  green robot) and nothing's reported, its update cell says when instead of
+  "—": **auto update in 4 days**, in green, so it's clear the bot has it
+  in hand. The list's entries carry the queue's day (`queued.by`) for it.
+- The overview's "Blocking the most" switches between master and
+  staging-next ("Master | Next") as the other lists switch between newest
+  and oldest, instead of a line under it: the line, its names wrapping,
+  made the card taller and left an empty band under the build failures,
+  outdated and update failures beside it. Without staging-next data (as
+  between a cycle's merge and Hydra's evaluation of the next), no switch.
+
 ### Fixed
+
+- Where the data is from: the digests under their names since the move to
+  the nixkeeper organisation (digest-builds, not nixkeeper-hydra); Hydra's
+  evaluations named by branch (master, staging-next, haskell-updates), each
+  linking to its jobset; staging-next's evaluation and the PRs merged into
+  staging or staging-next listed; "Last sync", not "Daily sync" (every 3
+  hours on nixkeeper.com).
+
+- Once a staging-next cycle is merged into master, what Hydra's last
+  evaluation of it said (what breaks there, what blocks it, how an update
+  builds there) is no longer shown as a forecast: it's master's now. Until
+  Hydra evaluates the next cycle, there's none. After #571813's merge on
+  2026-10-16, 86 packages still said they'd break "when staging-next is
+  merged", and 302 that they were stopped there.
 
 - An outdated package's newest version isn't one distribution's packaging
   of it, a part added to a release more distributions have: curl 8.23.0,

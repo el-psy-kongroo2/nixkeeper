@@ -62,10 +62,10 @@ list. From the top:
   Beside them, the failing packages **blocking the most** others: a build
   that fails because one of its dependencies did, as zh.fail counts them in
   all of nixpkgs (fix that one, and they all build again), and "show all"
-  for every package blocked (`?view=blocked`). Under them, the same on
-  staging-next, before its merge into master: the dependencies failing
-  there that stop the most packages building on master (in Hydra's newest
-  evaluation of it, its day said). The panels of both say it too: "its
+  for every package blocked (`?view=blocked`). While Hydra has evaluated
+  the current staging-next, "Master | Next" switches it to staging-next,
+  before its merge into master: the dependencies failing there that stop
+  the most packages building on master (its evaluation's day said). The panels of both say it too: "its
   failure stops N other packages' builds on staging-next", "on
   staging-next, its build is stopped by X".
 - **Why things fail**: failed builds grouped by the same error (the line of
@@ -154,6 +154,7 @@ what's left.
 | **not marked broken** | failures nobody has marked yet | `?refine=notbroken` |
 | **not fixed on master yet** | outdated packages, leaving out those whose update is merged and waits for nixos-unstable | `?refine=notonmaster` |
 | **breaks on staging-next** | packages that build on master but fail their own build on staging-next, at the same version, in Hydra's newest evaluation of it (a day or two old): unless fixed, they fail on master when staging-next is merged into it. A forecast: no count includes it, and a fix may already be waiting on staging. The details link each failing build | `?refine=stagingnext` |
+| **with an open PR** | packages an open PR touches; with **Marked broken**, those a PR may fix (or that it's moot for, while it stays broken: a person checks; the panel says so too) | `?refine=withpr` |
 | **bot won't update it** | outdated packages nixpkgs-update won't update by itself, so it takes someone: it can't, skips them on purpose, or has never tried them and they aren't in its queue; none with an update PR open or merged | `?refine=nobot` |
 | **not via a team** (on a maintainer's page) | see [teams](#maintainers-and-teams) | `?team=none` |
 | **build failed because** | build failures for one reason, as the build's log on Hydra says (read by nixkeeper-hydra): compile error, tests, link error, missing header, CMake 4 (it refuses projects asking for CMake older than 3.5), CMake, Python import, dependencies, build or metadata, writes to `$HOME`, hash, patch, download, out of disk (Hydra's side), other, and more; "not read yet" while nixkeeper-hydra catches up. Each with how many there are in the list, on the platform picked | `?buildFailed=cmake4` |
@@ -180,13 +181,19 @@ merged since that likely fixes it, waiting for Hydra.
 **On GitHub**: what nixkeeper-prs found of the package's PRs and issues:
 
 - its update PR ready for the merge bot, superseded or overtaken, blocking
-  the update bot, or duplicated;
-- open PRs touching it while its build fails on Hydra (maybe its fix);
+  the update bot, or duplicated; **behind** when upstream has a newer
+  version than it brings (merged, the package would still be outdated:
+  worth updating the PR first), and **for a vulnerable package** when the
+  package counts as vulnerable (worth reviewing first, and checking whether
+  its version fixes the CVEs);
+- open PRs touching it while its build fails on Hydra (maybe its fix), and
+  for a package marked broken, that open PRs touch it (one may fix it);
 - its other open PRs, a removal first ("removes it from nixpkgs": the list
   says **being removed** too);
 - its issues that look done (a build failure that builds on Hydra now, an
-  update request nixpkgs has met; "check the condition" when the title
-  names something Hydra doesn't build) or still fail.
+  update request nixpkgs has met, an issue about CVEs none of which affect
+  nixpkgs' version as nixkeeper reads them; "check the condition" when the
+  title names something Hydra doesn't build) or still fail.
 
 These are worked out automatically, from titles, Hydra's builds and the
 merge bot's rules: hints for a person to check before acting (closing an
@@ -201,6 +208,24 @@ theirs, and the address becomes `?maintainer=yourhandle`, a link to your own
 that). Its teams (nixpkgs' `meta.teams`), when it has any, are listed too:
 clicking one shows only that team's packages, as `?team=` does in the
 address (`?team=gaming`, in any case).
+
+**You can merge these:** on a maintainer's page, above the list, the open
+PRs they can merge themselves with nixpkgs' merge bot: CI passed (nixpkgs
+CI's own verdict, its `no PR failures` status), nixpkgs' CI labels it
+merge-bot eligible, and they maintain every package it touches
+(their own PRs first, then those for a vulnerable package, then the
+longest waiting; each says so, and when it's behind upstream). Each says who opened it,
+how long it has waited, the branch when it isn't master, and who approved
+it. Review it, then comment `@NixOS/nixpkgs-merge-bot merge` on the PR (the
+block's **Copy** button): the bot merges it, if they're also in
+[@NixOS/nixpkgs-maintainers](https://github.com/orgs/NixOS/teams/nixpkgs-maintainers),
+which the bot asks for too (who's in it isn't public, so nixkeeper can't
+check). On a team's page, the same for
+the packages nixpkgs lists under the team (`meta.teams`, whose members are
+their maintainers), each with who can merge it; not those a list of the
+team's name adds, which their own maintainers merge. Left out: drafts, PRs with
+a conflict or changes requested, and those only committers can merge. From
+nixkeeper-prs' digest, as of the last sync.
 
 Leaving packages out, each a chip to undo it:
 
@@ -224,11 +249,11 @@ sync read from it:
 
 | Digest | Read |
 |---|---|
-| nixkeeper-hydra ([digest-builds](https://github.com/nixkeeper/digest-builds)) | the Hydra evaluations of master and haskell-updates |
-| nixkeeper-versions ([digest-versions](https://github.com/nixkeeper/digest-versions)) | Repology and the other version sources, when each was read |
-| nixkeeper-updates ([digest-update-bot](https://github.com/nixkeeper/digest-update-bot)) | nixpkgs-update's attempts, with how many are still to read, and its queue |
-| nixkeeper-vulnerabilities ([digest-vulnerabilities](https://github.com/nixkeeper/digest-vulnerabilities)) | the NixOS security tracker and OSV |
-| nixkeeper-prs ([digest-prs](https://github.com/nixkeeper/digest-prs)) | nixpkgs' open PRs and issues, and the PRs merged since the channel's commit |
+| [digest-builds](https://github.com/nixkeeper/digest-builds) | the Hydra evaluations of master (which the channels follow), staging-next (only the jobs that differ from master, while its cycle isn't merged) and haskell-updates |
+| [digest-versions](https://github.com/nixkeeper/digest-versions) | Repology and the other version sources, when each was read |
+| [digest-update-bot](https://github.com/nixkeeper/digest-update-bot) | nixpkgs-update's attempts, with how many are still to read, and its queue |
+| [digest-vulnerabilities](https://github.com/nixkeeper/digest-vulnerabilities) | the NixOS security tracker and OSV |
+| [digest-prs](https://github.com/nixkeeper/digest-prs) | nixpkgs' open PRs and issues, the PRs merged since the channel's commit, and those merged into staging or staging-next |
 
 A source the sync didn't use (too old, or it couldn't be read) says so in
 yellow: its packages were then asked about one by one instead.
@@ -329,7 +354,7 @@ what it would update to), and the log and every attempt to open:
 | skipped | the bot passes this package over on purpose (the package opts out, GNOME's release cycle, too many rebuilds, ...: the panel says which): while it does, updates are done by hand |
 | superseded | the attempt no longer matters: nixpkgs has moved past that version (in the channel, or merged on master), or a manual rule ignores it (`package-lists/ignored-updates.nix`) |
 | not attempted | the bot has never tried this package |
-| … · a robot's head | joined to any of these: nixpkgs-update will try it, from its queue (screen readers say "queued"). Green when to the newest version and its last attempt didn't fail, so its PR should follow; amber when it will try but it's unsure: its last attempt didn't work, it would update to another version, or only the package's updateScript runs, which decides the version (for outdated packages). Hover it for which; it opens the update panel too, which says when. Not shown while an update PR is open or merged |
+| … · a robot's head | joined to any of these: nixpkgs-update will try it, from its queue (screen readers say "queued"). Green when to the newest version and its last attempt didn't fail, so its PR should follow; amber when it will try but it's unsure: its last attempt didn't work, it would update to another version, or only the package's updateScript runs, which decides the version (for outdated packages). Hover it for which; it opens the update panel too, which says when. When green and nothing's reported, the cell says when instead of "—": **auto update in 4 days** (in green), so you can leave it to the bot. Not shown while an update PR is open or merged |
 | none reported | the bot opened a PR, found one open, had already pushed the update to its branch, had nothing to update (nothing newer by Nix's version order, say), or finished without a recognisable result (the panel says which) |
 
 The update panel also says when the bot will try the package again, from

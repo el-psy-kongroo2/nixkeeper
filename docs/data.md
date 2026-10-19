@@ -111,8 +111,9 @@ The page shows them under "checked … ago".
 
 One entry per row, sorted by name: the row (below) without what only its
 details show (`dataFile`, `homepage`, `repoCount`, `repologyCheckedAt`,
-`source`), its `queued` with only the versions and whether the bot runs its
-updateScript (`{ "to": ["4.22.7"], "script": true }`, when there's either),
+`source`), its `queued` with only the versions, whether the bot runs its
+updateScript and the day it's expected (`{ "to": ["4.22.7"], "script":
+true, "by": "2026-10-22" }`, when there's a version or a script),
 its builds with only `status` and `system`, its `update` with only
 `outcome` and `failedBecause` (still `null` when the bot never tried, missing when it isn't in
 nixpkgs), and its `upstream` with only `version`, `newer`, `community` and
@@ -213,6 +214,15 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
   name in lowercase, each run of other characters than letters and digits
   a `-`: `Security review` is `security-review`), `set/<name>.json` (a
   set's rows);
+- `views/merge.json`: the open PRs a maintainer can merge now with nixpkgs'
+  merge bot, from nixkeeper-prs' digest (eligible by nixpkgs CI's label, CI
+  green, no conflict, no changes requested, not a draft, touching tracked
+  packages), oldest first: `{ "checkedAt", "prs": [ { "number", "title",
+  "author", "created", "base", "packages": [row names], "who": [the
+  maintainers of every package it touches, GitHub handles], "approvedBy"?,
+  "behind"?, "vulnerable"? },
+  ... ] }`. With every package only. The maintainer and team views'
+  "You can merge these" (`prs_digest.mergeable`);
 - `history.json`: `{ "points": [ { "day", "tracked", "outdated", "failed",
   "buildFailures", "updateFailures", "vulnerable", "broken" }, ... ],
   "fixed": [ ... ] }`. `points`: the counts of the rows not in a set at each
@@ -370,7 +380,10 @@ and how it builds there, from Hydra's newest evaluation of staging-next
 (nixkeeper-hydra's `staging-next.json.gz`): `eval` (`eval`, `evaluatedAt`),
 `inEval` (false: merged since that evaluation), and `builds` (`system`,
 `status`, `build`: each platform's job at the PR's version, or at a newer
-one when staging-next has moved past it: then `evalVersion`, that version).
+one when staging-next has moved past it: then `evalVersion`, that version). None of the staging-next build fields (these, `stagingNextBreaks`,
+`stagingNextBlockedBy`, `stagingNextBlocks`) come from an evaluation made
+before the last staging-next cycle was merged into master: that cycle is
+master's now, and until Hydra evaluates the next, there are none.
 `openPR` also has `facts` (the full row only), what
 nixkeeper-prs found of it: `fixesBuild` (it touches the package while its
 build fails on Hydra: then not in `fixPRs` too), `mergeBot` (`ready`: a maintainer can merge
@@ -379,7 +392,11 @@ are sorted), `state` (`overtaken`, `downgrade`, `snapshotToRelease`,
 `preRelease`) with nixpkgs' version `now`, `blocksBot` (the day
 nixpkgs-update is expected to try the update it blocks, or `true`), and
 `duplicates` (open PRs with the same diff or change, or for the same
-package and branch).
+package and branch); and what nixkeeper adds (`prs_digest.cross_check`):
+`behind` (upstream's newer version, `refVersion`, when it's newer than the
+PR's `to`: merged, the package would still be outdated) and `vulnerable`
+(`true`: the package counts as vulnerable). `views/merge.json`'s PRs have
+the same two, by the update's package.
 
 `dropPR` (in the list too): an open PR removes the package from nixpkgs,
 its title naming the package itself: `{"number", "title"}` (the list's
@@ -402,7 +419,7 @@ From nixkeeper-prs too, the full row only, at most 5 of each:
 |---|---|
 | `fixPRs` | open PRs (not drafts) touching the package while its build fails on Hydra, maybe its fix, other than its update PR: `[{"number", "title", "url"}]` |
 | `otherPRs` | its other open PRs (not drafts, nor its update PR or `fixPRs`), by the package their title names or the `pkgs/by-name` directory they touch, a removal first, then the newest: `[{"number", "title", "kind"?, "mergeBot"?}]`; `kind` `drop` (it removes the package its title names: "foo: drop", "remove package", "drop in favor of", not "drop unused bar"), `init` or `update` |
-| `issueChecks` | its open issues nixkeeper-prs checked, where there's something to do: `[{"number", "title", "url", "kind", "verdict", "condition"?, "now"?}]`; `kind` `build` (a build failure: `verdict` `builds`, on Hydra now, a candidate to close unless `condition`, the title adding one only a person can check; or `failing`, still), or `update` (an update request: `done`, nixpkgs has the version asked or newer, `now`; or `partly`, moved on but not that far) |
+| `issueChecks` | its open issues nixkeeper-prs checked, where there's something to do: `[{"number", "title", "url", "kind", "verdict", "condition"?, "now"?}]`; `kind` `build` (a build failure: `verdict` `builds`, on Hydra now, a candidate to close unless `condition`, the title adding one only a person can check; or `failing`, still), `update` (an update request: `done`, nixpkgs has the version asked or newer, `now`; or `partly`, moved on but not that far), or `cve` (an issue whose title names CVEs, every one of them `fixed` or `patched` among the package's `vulnerabilities`: `verdict` `cveFixed`, with `cves`; worked out by the sync, `prs_digest.add_cve_issues`) |
 
 ### Builds (Hydra)
 

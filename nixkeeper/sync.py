@@ -284,11 +284,14 @@ def main():
     # the digest's only (it knows where each is).
     prs_digest.add_staging_prs(outdated, digest.get("staging"))
     # And how those on staging-next build there (Hydra's evaluation of it).
-    staging_next = branches.load_staging_next(now)
+    cycles = (digest.get("staging") or {}).get("stagingNext") or {}
+    staging_next = branches.current_staging_next(
+        branches.load_staging_next(now), cycles.get("lastMerged")
+    )
     branches.apply_staging_next(outdated, staging_next)
     # And what staging-next breaks: packages that build on master, failing
     # there themselves (a forecast, for their panel and a filter).
-    cycle = ((digest.get("staging") or {}).get("stagingNext") or {}).get("open")
+    cycle = cycles.get("open")
     branches.apply_staging_next_breaks(shown, staging_next, cycle)
     # And who stops whom there: a dependency failing on staging-next.
     branches.apply_staging_next_blocked(index_rows, staging_next)
@@ -308,6 +311,12 @@ def main():
     # What this sync finds fixed since the last (with who, when a PR is
     # known), kept on each package a month too, for its panel.
     found_fixes = history.fixes(index_rows, previous, now)
+    # An update PR behind upstream, or for a vulnerable package: once the
+    # versions and vulnerabilities are in (prs_digest.cross_check).
+    prs_digest.cross_check(index_rows)
+    # And CVE issues nixkeeper finds fixed: candidates to close.
+    if digest.get("open"):
+        prs_digest.add_cve_issues(index_rows, digest["open"][1])
     history.add_recent_fixes(index_rows, previous, found_fixes, now)
     # Packages one update moves together (one package file, version and
     # homepage): one entry in the overview's lists, and their fixes, next
@@ -344,7 +353,18 @@ def main():
         )
         if everything
         else None,
-        kept={nixpkgs_source.EVALUATIONS: nixpkgs_source.kept_answers()},
+        kept={
+            nixpkgs_source.EVALUATIONS: nixpkgs_source.kept_answers(),
+            # The PRs maintainers can merge with the merge bot: the
+            # maintainer and team views' "You can merge these" (every
+            # package's PRs: with every package only).
+            "views/merge.json": {
+                "checkedAt": now,
+                "prs": prs_digest.mergeable(digest["raw"], index_rows),
+            }
+            if everything and digest.get("raw") is not None
+            else None,
+        },
     )
     nixpkgs_source.stop_keeping()
     # With every package, what changed for the lists' own packages only.

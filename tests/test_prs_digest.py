@@ -462,3 +462,159 @@ class StagingPRs(unittest.TestCase):
         row = self.row(stagingPR={"number": 1})
         prs_digest.add_staging_prs([row], None)
         self.assertNotIn("stagingPR", row)
+
+
+class Mergeable(unittest.TestCase):
+    """The PRs maintainers can merge with the merge bot (views/merge.json)."""
+
+    ROWS = [
+        {"name": "wine"},
+        {"name": "python313Packages.rq", "attrs": ["python313Packages.rq"]},
+    ]
+
+    def pr(self, n, **kw):
+        found = {
+            "n": n,
+            "title": f"wine: {n}",
+            "author": "r-ryantm",
+            "created": f"2026-10-0{n}T00:00:00Z",
+            "base": "master",
+            "draft": False,
+            "mergeable": "UNKNOWN",
+            "packages": ["wine"],
+            "mergeBot": {"ready": True, "maintainers": ["a", "b"], "label": True},
+        }
+        found.update(kw)
+        return found
+
+    def test_ready_ones_oldest_first(self):
+        prs = [
+            self.pr(3),
+            self.pr(1, approvedBy=["c"], author="a"),
+            self.pr(2, packages=["python3Packages.rq"]),
+        ]
+        found = prs_digest.mergeable(prs, self.ROWS)
+        self.assertEqual([p["number"] for p in found], [1, 2, 3])
+        self.assertEqual(
+            found[0],
+            {
+                "number": 1,
+                "title": "wine: 1",
+                "author": "a",
+                "created": "2026-10-01T00:00:00Z",
+                "base": "master",
+                "packages": ["wine"],
+                "who": ["a", "b"],
+                "approvedBy": ["c"],
+            },
+        )
+        # Python's alias, as the row's versioned set.
+        self.assertEqual(found[1]["packages"], ["python313Packages.rq"])
+
+    def test_left_out(self):
+        prs = [
+            self.pr(1, mergeBot={"ready": False, "maintainers": ["a"]}),  # CI
+            self.pr(2, mergeBot={"ready": True, "maintainers": []}),  # committers
+            self.pr(3, mergeable="CONFLICTING"),
+            self.pr(4, review="CHANGES_REQUESTED"),
+            self.pr(5, draft=True),
+            self.pr(6, packages=["firefox"]),  # no row of it
+            self.pr(7, mergeBot=None),
+        ]
+        self.assertEqual(prs_digest.mergeable(prs, self.ROWS), [])
+
+
+class CrossCheck(unittest.TestCase):
+    """An update PR behind upstream, or for a vulnerable package."""
+
+    def row(self, **kw):
+        found = {
+            "name": "wine",
+            "nixVersion": "10.15",
+            "refVersion": "10.17",
+            "openPR": {"number": 1, "to": "10.16", "facts": {"mergeBot": "ready"}},
+        }
+        found.update(kw)
+        return found
+
+    def test_behind_and_vulnerable(self):
+        row = self.row(vulnerabilities=[{"id": "CVE-1", "verdict": "affected"}])
+        prs_digest.cross_check([row])
+        self.assertEqual(
+            row["openPR"]["facts"],
+            {"mergeBot": "ready", "behind": "10.17", "vulnerable": True},
+        )
+
+    def test_up_to_upstream_and_again(self):
+        row = self.row(refVersion="10.16")
+        row["openPR"]["facts"]["behind"] = "10.16"  # an earlier run's
+        prs_digest.cross_check([row])
+        self.assertEqual(row["openPR"]["facts"], {"mergeBot": "ready"})
+        # Nothing at all: no facts left.
+        bare = self.row(refVersion=None, openPR={"number": 2, "to": "10.16"})
+        prs_digest.cross_check([bare])
+        self.assertNotIn("facts", bare["openPR"])
+
+    def test_in_the_merge_list(self):
+        rows = [self.row(markedInsecure=["CVE-2"])]
+        prs = [
+            {
+                "n": 1,
+                "title": "wine: 10.15 -> 10.16",
+                "created": "2026-10-01T00:00:00Z",
+                "packages": ["wine"],
+                "update": {"attr": "wine", "to": "10.16"},
+                "mergeBot": {"ready": True, "maintainers": ["a"]},
+            }
+        ]
+        found = prs_digest.mergeable(prs, rows)[0]
+        self.assertEqual((found["behind"], found["vulnerable"]), ("10.17", True))
+
+
+class CveIssues(unittest.TestCase):
+    """CVE issues nixkeeper finds fixed: candidates to close."""
+
+    def rows(self):
+        return [
+            {
+                "name": "crewai",
+                "vulnerabilities": [
+                    {"id": "CVE-2026-2275", "verdict": "fixed"},
+                    {"id": "CVE-2026-2287", "verdict": "patched"},
+                    {"id": "CVE-2026-9999", "verdict": "affected"},
+                ],
+                "issueChecks": [{"number": 3, "kind": "cve", "verdict": "cveFixed"}],
+            },
+            {"name": "other"},
+        ]
+
+    def test_fixed_ones(self):
+        rows = self.rows()
+        issues = [
+            {"number": 1, "title": "crewai: CVE-2026-2275, cve-2026-2287"},
+            {
+                "number": 2,
+                "title": "crewai: CVE-2026-2275 CVE-2026-9999",
+            },  # one affects
+            {"number": 4, "title": "CVE-2026-1111 Record"},  # not known
+            {"number": 5, "title": "crewai: crashes"},
+        ]
+        prs_digest.add_cve_issues(rows, issues)
+        self.assertEqual(
+            rows[0]["issueChecks"],
+            [
+                {
+                    "number": 1,
+                    "title": "crewai: CVE-2026-2275, cve-2026-2287",
+                    "url": "https://github.com/NixOS/nixpkgs/issues/1",
+                    "kind": "cve",
+                    "verdict": "cveFixed",
+                    "cves": ["CVE-2026-2275", "CVE-2026-2287"],
+                }
+            ],
+        )
+        self.assertNotIn("issueChecks", rows[1])
+        # The earlier run's (#3) went: worked out again.
+        rows[0]["issueChecks"] = [{"number": 9, "kind": "build"}]
+        prs_digest.add_cve_issues(rows, [])
+        self.assertEqual(rows[0]["issueChecks"], [{"number": 9, "kind": "build"}])
