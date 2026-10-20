@@ -338,3 +338,91 @@ class RunStamps(unittest.TestCase):
             [stamped("a", "2026-10-06T06:00:00+00:00")], run="2026-10-06T06:00:00+00:00"
         )
         self.assertEqual(first, second)
+
+
+class Unbuilt(unittest.TestCase):
+    """Listed for a platform Hydra doesn't build it on (the page's
+    unbuiltWhere: tests/js/logic.test.mjs has the same cases)."""
+
+    def row(self, platforms, *builds):
+        return {
+            "name": "p",
+            "platforms": platforms,
+            "builds": [{"system": s, "status": st} for s, st in builds],
+        }
+
+    def test_cases(self):
+        both = {"linux": True, "darwin": True}
+        juce = self.row(
+            both,
+            ("x86_64-linux", "ok"),
+            ("aarch64-linux", "ok"),
+            ("aarch64-darwin", "notBuilt"),
+        )
+        self.assertEqual(datastore.unbuilt_where(juce), ["darwin"])
+        arm = self.row(
+            {"linux": True, "darwin": False},
+            ("x86_64-linux", "ok"),
+            ("aarch64-linux", "notBuilt"),
+        )
+        self.assertEqual(datastore.unbuilt_where(arm), ["aarch64-linux"])
+        nowhere = self.row(
+            both,
+            ("x86_64-linux", "notBuilt"),
+            ("aarch64-linux", "notBuilt"),
+            ("aarch64-darwin", "notBuilt"),
+        )
+        self.assertEqual(datastore.unbuilt_where(nowhere), [])
+        not_listed = self.row(
+            {"linux": True, "darwin": False},
+            ("x86_64-linux", "ok"),
+            ("aarch64-darwin", "notBuilt"),
+        )
+        self.assertEqual(datastore.unbuilt_where(not_listed), [])
+        # No restriction: listed everywhere (fzssh).
+        anywhere = self.row(
+            None, ("x86_64-linux", "ok"), ("aarch64-darwin", "notBuilt")
+        )
+        self.assertEqual(datastore.unbuilt_where(anywhere), ["darwin"])
+
+
+class Numbers(unittest.TestCase):
+    def test_counts(self):
+        rows = [
+            {
+                "name": "a",
+                "maintainers": [],
+                "builds": [
+                    {"system": "x86_64-linux", "status": "failed"},
+                    {"system": "aarch64-linux", "status": "dependency"},
+                    {"system": "aarch64-darwin", "status": "notBuilt"},
+                ],
+                "openPR": {"facts": {"behind": "2.0"}},
+            },
+            {
+                "name": "b",
+                "maintainers": ["x"],
+                "builds": [
+                    {"system": "x86_64-linux", "status": "ok"},
+                    {"system": "aarch64-linux", "status": "unfinished"},
+                ],
+            },
+            # A set's: its builds count, its maintainers don't.
+            {
+                "name": "haskellPackages.c",
+                "set": "haskellPackages",
+                "maintainers": [],
+                "builds": [{"system": "x86_64-linux", "status": "failed"}],
+            },
+        ]
+        self.assertEqual(
+            datastore.numbers(rows),
+            {
+                "builds": 5,
+                "failing": 2,
+                "blocked": 1,
+                "unfinished": 1,
+                "behind": 1,
+                "unmaintained": 1,
+            },
+        )

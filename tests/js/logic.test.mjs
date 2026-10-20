@@ -7,6 +7,7 @@ import { describe, test } from 'node:test';
 
 import {
   aheadOnMaster,
+  attentionPrint,
   attentionRank,
   botWontUpdate,
   buildFailedBecause,
@@ -22,7 +23,9 @@ import {
   daysUntil,
   escapeHtml,
   failedBecause,
+  familyLabel,
   faviconKey,
+  foldFamilies,
   fromMaster,
   githubRepo,
   hasFailure,
@@ -47,6 +50,7 @@ import {
   parseMaintainers,
   parseTeams,
   problemSince,
+  prPrint,
   raw,
   safeUrl,
   searchHandle,
@@ -59,6 +63,8 @@ import {
   themeFor,
   timeAgo,
   trendChange,
+  unbuiltOn,
+  unbuiltWhere,
   updateTitle,
   versionDiff,
   viewPath,
@@ -78,6 +84,57 @@ const daysAgo = (n) => new Date(NOW - n * 86400e3).toISOString();
 const pkg = (fields = {}) => ({ name: 'p', nixStatus: 'newest', ...fields });
 const outdated = (fields = {}) =>
   pkg({ nixStatus: 'outdated', nixVersion: '1.0', refVersion: '1.1', ...fields });
+
+describe('attentionPrint', () => {
+  const juce = (fields = {}) =>
+    outdated({ name: 'juce', nixVersion: '8.0.12', refVersion: '9.0.4', ...fields });
+  test('the same while nothing changes', () => {
+    assert.equal(attentionPrint(juce(), 'a'), attentionPrint(juce(), 'b'));
+  });
+  test('a newer version, a new failing build, an update failure, broken', () => {
+    const before = attentionPrint(juce());
+    assert.notEqual(attentionPrint(juce({ refVersion: '9.0.5' })), before);
+    assert.notEqual(
+      attentionPrint(juce({ builds: [{ system: 'aarch64-darwin', status: 'failed' }] })),
+      before,
+    );
+    assert.notEqual(
+      attentionPrint(
+        juce({ updateFailure: true, update: { outcome: 'failed', failedBecause: 'patch' } }),
+      ),
+      before,
+    );
+    assert.notEqual(attentionPrint(juce({ markedBroken: true })), before);
+    // An ok build isn't attention: no change.
+    assert.equal(
+      attentionPrint(juce({ builds: [{ system: 'x86_64-linux', status: 'ok' }] })),
+      before,
+    );
+  });
+  test('the same from the list entry and the full row', () => {
+    const entry = juce({ vuln: { n: 1, by: ['tracker'] } });
+    const row = juce({
+      vulnerabilities: [{ id: 'CVE-1', verdict: 'affected', source: 'tracker' }],
+    });
+    assert.equal(attentionPrint(entry, 's'), attentionPrint(row, 's'));
+  });
+  test('vulnerable: back at the next sync', () => {
+    const vuln = juce({ vuln: { n: 1, by: ['tracker'] } });
+    assert.equal(attentionPrint(vuln, 'sync1'), attentionPrint(vuln, 'sync1'));
+    assert.notEqual(attentionPrint(vuln, 'sync1'), attentionPrint(vuln, 'sync2'));
+  });
+});
+
+describe('prPrint', () => {
+  const pr = (fields = {}) => ({ number: 1, title: 'foo: 1.2 -> 1.3', ...fields });
+  test('the same while nothing that matters changes', () => {
+    assert.equal(prPrint(pr()), prPrint(pr({ behind: '1.5', approvedBy: ['x'] })));
+  });
+  test('a newer version in its title, or a CVE, brings it back', () => {
+    assert.notEqual(prPrint(pr()), prPrint(pr({ title: 'foo: 1.2 -> 1.4' })));
+    assert.notEqual(prPrint(pr()), prPrint(pr({ vulnerable: true })));
+  });
+});
 
 describe('computeStatus', () => {
   test("follows Repology's statuses", () => {
@@ -393,6 +450,39 @@ describe('failures and platforms', () => {
     assert.equal(hasFailure(pkg({ updateFailure: { version: '1.1' } }), 'darwin'), true);
     assert.equal(hasFailure(pkg({ nixStatus: 'missing' })), true);
     assert.equal(hasFailure(pkg()), false);
+  });
+  test('listed but not built there', () => {
+    const built = (system) => ({ system, status: 'ok' });
+    const none = (system) => ({ system, status: 'notBuilt' });
+    const both = { linux: true, darwin: true };
+    // juce: built on Linux, no Darwin build.
+    const juce = pkg({
+      platforms: both,
+      builds: [built('x86_64-linux'), built('aarch64-linux'), none('aarch64-darwin')],
+    });
+    assert.equal(unbuiltOn(juce, 'darwin'), true);
+    assert.equal(unbuiltOn(juce, 'linux'), false);
+    assert.deepEqual(unbuiltWhere(juce), ['darwin']);
+    // One Linux system missing: that one, not the family.
+    const arm = pkg({
+      platforms: { linux: true, darwin: false },
+      builds: [built('x86_64-linux'), none('aarch64-linux')],
+    });
+    assert.equal(unbuiltOn(arm, 'aarch64-linux'), true);
+    assert.equal(unbuiltOn(arm, 'linux'), false);
+    assert.deepEqual(unbuiltWhere(arm), ['aarch64-linux']);
+    // Hydra builds it nowhere (unfree, kept off it): not this.
+    const unfree = pkg({
+      platforms: both,
+      builds: [none('x86_64-linux'), none('aarch64-linux'), none('aarch64-darwin')],
+    });
+    assert.deepEqual(unbuiltWhere(unfree), []);
+    // Not listed there: not this either.
+    const linuxOnly = pkg({
+      platforms: { linux: true, darwin: false },
+      builds: [built('x86_64-linux'), none('aarch64-darwin')],
+    });
+    assert.deepEqual(unbuiltWhere(linuxOnly), []);
   });
   test('"any platform" counts as both', () => {
     assert.equal(onPlatform(pkg({ platforms: null }), 'linux'), true);
@@ -1095,5 +1185,61 @@ describe('failedBecause', () => {
     assert.equal(failedBecause({ updateFailure: true, update: { outcome: 'failed' } }), 'other');
     // Not failing: no reason, whatever an older attempt said.
     assert.equal(failedBecause({ update: { failedBecause: 'patch' } }), null);
+  });
+});
+
+describe('foldFamilies', () => {
+  const pkg = (name, extra = {}) => ({
+    name,
+    family: 'f1',
+    nixStatus: 'outdated',
+    refVersion: '3.1.218',
+    ...extra,
+  });
+  test('three or more alike are one row, the first; open shows them after it', () => {
+    const list = [pkg('sdk-a'), pkg('other', { family: null }), pkg('sdk-b'), pkg('sdk-c')];
+    const { list: out, folds, inOpen } = foldFamilies(list);
+    assert.deepEqual(
+      out.map((p) => p.name),
+      ['sdk-a', 'other'],
+    );
+    const fold = folds.get('sdk-a');
+    assert.equal(fold.members.length, 3);
+    assert.equal(fold.open, false);
+    assert.equal(inOpen.size, 0);
+    const opened = foldFamilies(list, () => '', new Set([fold.key]));
+    assert.deepEqual(
+      opened.list.map((p) => p.name),
+      ['sdk-a', 'sdk-b', 'sdk-c', 'other'],
+    );
+    assert.deepEqual([...opened.inOpen], ['sdk-b', 'sdk-c']);
+  });
+  test('not when fewer, or unlike in status, target or key', () => {
+    assert.equal(foldFamilies([pkg('a'), pkg('b')]).list.length, 2);
+    const list = [
+      pkg('a'),
+      pkg('b'),
+      pkg('c', { refVersion: '3.1.219' }),
+      pkg('d', { nixStatus: 'newest' }),
+    ];
+    assert.equal(foldFamilies(list).list.length, 4);
+    // a, b and c alike but for the key (the dot): c is its own.
+    const three = [pkg('a'), pkg('b'), pkg('c', { bad: true })];
+    assert.equal(foldFamilies(three, (p) => (p.bad ? 'bad' : 'ok')).list.length, 3);
+    assert.equal(foldFamilies(three).list.length, 1);
+  });
+});
+
+describe('familyLabel', () => {
+  test('the shared end, else the common start and a star', () => {
+    assert.equal(
+      familyLabel(['linuxPackages.mbp2018-bridge-drv', 'linuxPackages_6_1.mbp2018-bridge-drv']),
+      'mbp2018-bridge-drv',
+    );
+    assert.equal(
+      familyLabel(['python313Packages.huaweicloudsdkaad', 'python313Packages.huaweicloudsdkcce']),
+      'python313Packages.huaweicloudsdk*',
+    );
+    assert.equal(familyLabel(['abc', 'xyz']), null);
   });
 });

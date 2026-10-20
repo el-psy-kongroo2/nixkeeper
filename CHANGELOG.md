@@ -11,6 +11,71 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Added
 
+- One update, one row: in the package list, three or more packages one
+  update moves together (the same family, status and newest version) are
+  one row with "+186 like it", a button showing the others after it.
+  fabaff's outdated list: 578 rows to 393 (the 187 huaweicloudsdk*).
+
+### Fixed
+
+- Outdated only by another spelling of the same snapshot
+  (`unstable-2022-10-20` against nixpkgs' older channels' `2022-10-20`):
+  up to date now. 104 packages on 2026-10-20 (gawkextlib's 17,
+  celeste-classic, haste-server...).
+- Outdated only by nixpkgs' own earlier version: one only its old release
+  channels have (24.05 to 25.11, no longer updated: rPackages' MeSH
+  1.15.1, yaziPlugins' old numbering), or one only its release channels
+  have while an upstream index (PyPI, CRAN...) has unstable's
+  (python3Packages.azure-ai-vision-imageanalysis: 39.0.0 on 25.11 and
+  26.05, a mistake reverted to PyPI's 1.0.0). Compared with the other
+  repositories instead: 231 packages up to date on 2026-10-20. The newest
+  channel ahead with no index saying otherwise still counts (a backport,
+  msedgedriver).
+
+### Changed
+
+- "being removed" in the list only when removal looks likely: the removal
+  PR has no changes requested and activity in the last 90 days (19 of 26
+  on 2026-10-20). Otherwise the panel says "removal proposed (changes
+  requested)" or "(no activity since ...)", and `dropPR` carries
+  `proposed`.
+
+## [0.20.0] - 2026-10-19
+
+The open PRs a maintainer can merge themselves become a list on their page:
+**You can merge these**, the PRs ready for the merge bot that they maintain
+every package of, with the comment to post (over 1,000 on nixkeeper.com,
+for some 830 maintainers, about 200 waiting over three months). Update PRs
+say when they're **behind** upstream or **for a vulnerable package**, and
+CVE issues nixkeeper finds fixed are candidates to close. Platforms a
+package is listed for but Hydra never builds it on show struck through,
+with a list of all 2,600 of them. What you've looked at can be **hidden
+until it changes**, packages and PRs alike, in your own browser. The update
+column says **auto update in 4 days** when the bot has it in hand, and the
+overview ends with **nixpkgs in numbers**.
+
+### Added
+
+- **Hide** on each PR of "You can merge these": it leaves the block, in this
+  browser only, until it changes (a newer version in its title, or a CVE),
+  with "N hidden · show them" to see them again.
+- **nixpkgs in numbers**, at the bottom of the overview: open PRs (12,514
+  on 2026-10-19), ready for the merge bot and waiting for their own
+  maintainers (1,018), update PRs behind upstream (582), the update bot's
+  round (10.8 days), builds not built on Hydra (the top card's, split:
+  failing themselves, blocked by a dependency, unfinished), not built
+  where listed (2,617), up to date (79%), without a maintainer (14,136).
+- **Hide until it changes**, in a package's panel: it leaves your lists,
+  in this browser only, until what it needs attention for changes (a
+  newer version, another failing build, a new update failure, the broken
+  mark, a new CVE; a vulnerable package comes back at the next sync).
+  "N hidden · show them" beside the list's count shows them again, greyed.
+- **Not built where listed** (`?view=unbuilt`, linked from Marked broken):
+  every package nixpkgs lists for a platform Hydra doesn't build it on,
+  outside the sets, and with a platform picked, those not built there
+  (`?view=unbuilt&platform=darwin`, `aarch64-linux`). On 2026-10-19:
+  2,624, of them 2,253 for Darwin and 806 for aarch64-linux. Written by the
+  sync (`views/unbuilt.json`) with the same rule as the page's struck tags.
 - An issue about CVEs that none affect nixpkgs' version, as nixkeeper reads
   them (fixed or patched), is a candidate to close in the package's panel,
   beside the build and update checks (4 of the 17 open CVE issues on
@@ -59,6 +124,14 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Changed
 
+- A platform a package is listed for but Hydra doesn't build it on (no
+  build exists there, usually as a dependency isn't available there) has
+  its tag struck through and dimmed: "Linux · ~~Darwin~~", and "Linux
+  x86_64 · ~~aarch64~~" when one Linux system is missing. Picking that
+  platform no longer counts it as available there, and **Not built where
+  listed** (`?refine=unbuilt`) finds them: on 2026-10-19, 1,659 listed for
+  Darwin and about 900 for aarch64-linux alone, among packages outside the
+  sets.
 - When nixpkgs-update is set to update a package to the newest version (the
   green robot) and nothing's reported, its update cell says when instead of
   "—": **auto update in 4 days**, in green, so it's clear the bot has it
@@ -72,6 +145,9 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Fixed
 
+- A package nixpkgs doesn't restrict to platforms ("any platform") that
+  Hydra doesn't build somewhere shows the struck tags too ("Linux ·
+  ~~Darwin~~", fzssh's), not "any platform" (334 on 2026-10-19).
 - Where the data is from: the digests under their names since the move to
   the nixkeeper organisation (digest-builds, not nixkeeper-hydra); Hydra's
   evaluations named by branch (master, staging-next, haskell-updates), each
@@ -2048,7 +2124,8 @@ to its restructuring into a Python package.
   packages removed from the lists don't leave files behind.
 - The sync script is a Python package (`nixkeeper/`) with tests in `tests/`.
 
-[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.19.0...HEAD
+[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.16.0...v0.17.0

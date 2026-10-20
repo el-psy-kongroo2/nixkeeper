@@ -208,12 +208,23 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
   fix to backport, not in a set updated in bulk), `broken.json` (marked broken, not in such a set),
   `backport.json` (a CVE to backport: `backport`, not in such a set),
   `blocked.json` (a build not tried because a dependency failed, in such
-  sets too),
+  sets too), `unbuilt.json` (listed for a platform Hydra doesn't build it
+  on, not in such a set: `datastore.unbuilt_where`, the page's struck
+  platform tags; its count in `index.json`'s `views.unbuilt`),
   `maintainer/<handle>.json` (the handle in lowercase; `none.json`: no
   maintainer, not in such a set), `team/<slug>.json` and `list/<slug>.json` (the
   name in lowercase, each run of other characters than letters and digits
   a `-`: `Security review` is `security-review`), `set/<name>.json` (a
   set's rows);
+- `merge` and `numbers` in `index.json` (with every package): the
+  overview's "nixpkgs in numbers". `merge`: `{ "prs", "maintainers" (who
+  could merge at least one), "over90" (waiting over 90 days) }` of
+  `views/merge.json` (`prs_digest.merge_summary`); `numbers`: `{ "builds",
+  "failing", "blocked", "unfinished" (Hydra's builds of every row, sets
+  too, and of those not built, by kind: their own failure, a dependency's,
+  timed out or aborted; together, the counts' `failingBuilds`),
+  "behind" (update PRs behind upstream), "unmaintained" (packages outside
+  the sets with no maintainer) }` (`datastore.numbers`).
 - `views/merge.json`: the open PRs a maintainer can merge now with nixpkgs'
   merge bot, from nixkeeper-prs' digest (eligible by nixpkgs CI's label, CI
   green, no conflict, no changes requested, not a draft, touching tracked
@@ -300,7 +311,7 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
 | `unversioned` | with every package: `true` for a row of `darwin` or `freebsd`, not versioned software: its builds are what's checked |
 | `unread` | with every package: the sources this sync didn't read for the row and kept as they were (`["update"]`: its nixpkgs-update attempt, which nixkeeper-updates' digest hasn't read yet) |
 | `source` | where nixpkgs defines it, on GitHub at the channel's commit and line |
-| `family` | when one update moves it with other rows (the same package file in nixpkgs, the same version and homepage: the 187 `huaweicloudsdk*` Python packages, a kernel module once per kernel): a short key they share. The overview's lists show a family as one entry |
+| `family` | when one update moves it with other rows (the same package file in nixpkgs, the same version and homepage: the 187 `huaweicloudsdk*` Python packages, a kernel module once per kernel): a short key they share. The overview's lists show a family as one entry, and the package list folds three or more alike (the same status and newest version) into one row |
 | `unfree` | `true` when every attribute is unfree (Hydra doesn't build those) |
 
 ### Versions (Repology, and nixkeeper's own checks)
@@ -399,8 +410,11 @@ PR's `to`: merged, the package would still be outdated) and `vulnerable`
 the same two, by the update's package.
 
 `dropPR` (in the list too): an open PR removes the package from nixpkgs,
-its title naming the package itself: `{"number", "title"}` (the list's
-"being removed" badge).
+its title naming the package itself: `{"number", "title"}`, with
+`"proposed"` saying why the removal looks unlikely for now ("changes
+requested", or "no activity since 2026-06-19" after 90 days); the same
+`proposed` is on the removal in `otherPRs`. The list's "being removed"
+badge is only for a removal without `proposed`.
 
 `recentFixes` (the full row only): its fixes of the last 30 days, newest
 first, at most 3, each as in `history.json`'s `fixed` (without the name):

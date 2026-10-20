@@ -1,4 +1,5 @@
 import {
+  attentionPrint,
   botWontUpdate,
   buildFailedBecause,
   buildsWith as buildsOn,
@@ -12,7 +13,9 @@ import {
   daysUntil,
   failedBecause,
   hasFailure as failureOn,
+  familyLabel,
   faviconKey,
+  foldFamilies,
   fromMaster,
   homeHref,
   html,
@@ -36,6 +39,7 @@ import {
   pageLinks,
   parseMaintainers,
   parseTeams,
+  prPrint,
   attentionRank as rankOn,
   raw,
   githubRepo as repoFrom,
@@ -50,6 +54,8 @@ import {
   themeFor,
   timeAgo,
   trendChange,
+  unbuiltOn,
+  unbuiltWhere,
   updateTitle,
   VIEWS,
   VULN_COUNTED,
@@ -245,8 +251,17 @@ const PLATFORMS = {
 };
 // The systems of a family nixpkgs builds (SYSTEMS in nixkeeper/sources/nixpkgs.py).
 const LINUX_SYSTEMS = ['x86_64-linux', 'aarch64-linux'];
+// Available on the platform picked: listed for it, and built there by Hydra
+// when Hydra builds it at all (unbuiltOn); listed but not built counts only
+// with "Not built where listed" on, or in its view, which find exactly
+// those.
 function inPlatform(pkg) {
-  return !platformFilter || onPlatform(pkg, platformFilter);
+  if (!platformFilter) return true;
+  if (!onPlatform(pkg, platformFilter)) return false;
+  // Not built where listed (?view=unbuilt): a platform picked keeps those
+  // not built there (Darwin: the Darwin ones), as the refine does.
+  if (shownView === VIEWS.unbuilt) return unbuiltOn(pkg, platformFilter);
+  return refines.has('unbuilt') || !unbuiltOn(pkg, platformFilter);
 }
 // The sync runs daily; older than this means runs are failing or GitHub has
 // paused the schedule (it does after 60 days without commits).
@@ -340,6 +355,18 @@ const REFINES = {
     title:
       'Only packages an open PR touches: for one marked broken, maybe its fix (or moot: a person checks)',
     test: (p) => (p.openPRs || 0) > 0,
+  },
+  // Listed for a platform Hydra doesn't build it on (unbuiltWhere): a
+  // dependency missing there, or meta.platforms promising too much. With a
+  // platform picked, that platform's only.
+  unbuilt: {
+    label: 'Not built where listed',
+    title:
+      "Only packages nixpkgs lists for a platform Hydra doesn't build them on (no build exists there): usually a dependency isn't available there, or meta.platforms promises too much",
+    test: (p) =>
+      platformFilter
+        ? onPlatform(p, platformFilter) && unbuiltOn(p, platformFilter)
+        : unbuiltWhere(p).length > 0,
   },
   // Where a person is needed: nixpkgs-update won't open the PR.
   nobot: {
@@ -748,7 +775,7 @@ function versionCell(pkg, st) {
   const failing = stale
     ? html`<span class="badge neutral" title="${staleText(stale, "nixkeeper's update check failing")}. ${communityCheck(pkg) ? "It's a community rule: report it to nixkeeper, or give the package a rule of your own." : 'Fix it in package-lists/update-checks.nix.'}">check failing</span>`
     : '';
-  const about = html`${pkg.set ? bulkBadge(pkg.set) : ''}${olderVersionKept(pkg) ? html`<span class="badge neutral" title="${keptText(pkg)}">older version</span>` : pkg.unversioned && st === 'neutral' ? html`<span class="badge neutral" title="${UNVERSIONED_TITLE}">not versioned</span>` : st === 'neutral' ? html`<span class="badge neutral">${statusLabel(pkg.nixStatus)}</span>` : ''}${pkg.archived ? html`<span class="badge warn" title="${archivedText(pkg)}">archived</span>` : ''}${pkg.dropPR ? html`<span class="badge warn" title="An open PR removes it from nixpkgs: #${pkg.dropPR.number} (${pkg.dropPR.title})">being removed</span>` : ''}${pkg.feed?.heldBack && st === 'ok' ? html`<span class="badge neutral" title="nixpkgs pins it to ${pkg.feed.name}: Hackage has ${pkg.feed.heldBack}, which Stackage holds back until its next series">Stackage LTS</span>` : ''}${pkg.devel ? html`<span class="badge devel ${st}">devel</span>` : ''}${vulnBadge(pkg)}${pkg.staleSince ? html`<span class="badge neutral" title="Repology lookup failed on the last run; this is data from ${new Date(pkg.staleSince).toLocaleString()}">not refreshed</span>` : pkg.lookupFailed ? html`<span class="badge neutral" title="${LOOKUP_FAILED}">not looked up</span>` : ''}`;
+  const about = html`${pkg.set ? bulkBadge(pkg.set) : ''}${olderVersionKept(pkg) ? html`<span class="badge neutral" title="${keptText(pkg)}">older version</span>` : pkg.unversioned && st === 'neutral' ? html`<span class="badge neutral" title="${UNVERSIONED_TITLE}">not versioned</span>` : st === 'neutral' ? html`<span class="badge neutral">${statusLabel(pkg.nixStatus)}</span>` : ''}${pkg.archived ? html`<span class="badge warn" title="${archivedText(pkg)}">archived</span>` : ''}${pkg.dropPR && !pkg.dropPR.proposed ? html`<span class="badge warn" title="An open PR removes it from nixpkgs: #${pkg.dropPR.number} (${pkg.dropPR.title})">being removed</span>` : ''}${pkg.feed?.heldBack && st === 'ok' ? html`<span class="badge neutral" title="nixpkgs pins it to ${pkg.feed.name}: Hackage has ${pkg.feed.heldBack}, which Stackage holds back until its next series">Stackage LTS</span>` : ''}${pkg.devel ? html`<span class="badge devel ${st}">devel</span>` : ''}${vulnBadge(pkg)}${pkg.staleSince ? html`<span class="badge neutral" title="Repology lookup failed on the last run; this is data from ${new Date(pkg.staleSince).toLocaleString()}">not refreshed</span>` : pkg.lookupFailed ? html`<span class="badge neutral" title="${LOOKUP_FAILED}">not looked up</span>` : ''}`;
   if (st !== 'warn')
     return html`<div class="vcell"><span class="v-now"><span class="v">${now}</span></span><span class="v-tags top">${about}${failing}</span></div>`;
   const target = targetVersion(pkg);
@@ -948,6 +975,68 @@ const store = (key, value) => {
     // storage blocked: it lasts until the page is left
   }
 };
+
+// "Hide until it changes": in this browser only (localStorage), each hidden
+// package by name with what it needed attention for then (attentionPrint).
+// Back as soon as that differs; "Show hidden" shows them all, greyed.
+const HIDDEN_KEY = 'nixkeeper-hidden';
+const hiddenPrints = (() => {
+  try {
+    return JSON.parse(stored(HIDDEN_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+})();
+let showHidden = false;
+// Entries that no longer match (it changed, or left the data) dropped, once
+// a view's packages are in: what's hidden only ever matches now.
+function pruneHidden(list) {
+  let changed = false;
+  for (const pkg of list) {
+    if (pkg.name in hiddenPrints && !isHidden(pkg)) {
+      delete hiddenPrints[pkg.name];
+      changed = true;
+    }
+  }
+  if (changed)
+    store(HIDDEN_KEY, Object.keys(hiddenPrints).length ? JSON.stringify(hiddenPrints) : '');
+}
+const isHidden = (pkg) => hiddenPrints[pkg.name] === attentionPrint(pkg, checkedAt);
+const notHidden = (pkg) => showHidden || !isHidden(pkg);
+function setHidden(pkg, hide) {
+  if (hide) hiddenPrints[pkg.name] = attentionPrint(pkg, checkedAt);
+  else delete hiddenPrints[pkg.name];
+  store(HIDDEN_KEY, Object.keys(hiddenPrints).length ? JSON.stringify(hiddenPrints) : '');
+  announce(hide ? `${pkg.name} hidden until it changes` : `${pkg.name} shown again`);
+  update({ keepPage: true });
+}
+
+// "You can merge these"'s Hide, as the packages': in this browser only,
+// each hidden PR by number with what it was then (prPrint), back as soon as
+// that differs. Entries for PRs no longer in the list are dropped once it's
+// in (loadMerge).
+const HIDDEN_PRS_KEY = 'nixkeeper-hidden-prs';
+const hiddenPrPrints = (() => {
+  try {
+    return JSON.parse(stored(HIDDEN_PRS_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+})();
+let showHiddenPrs = false;
+const isPrHidden = (pr) => hiddenPrPrints[pr.number] === prPrint(pr);
+function saveHiddenPrs() {
+  store(HIDDEN_PRS_KEY, Object.keys(hiddenPrPrints).length ? JSON.stringify(hiddenPrPrints) : '');
+}
+function setPrHidden(number, hide) {
+  const pr = (mergeList || []).find((p) => p.number === number);
+  if (!pr) return;
+  if (hide) hiddenPrPrints[number] = prPrint(pr);
+  else delete hiddenPrPrints[number];
+  saveHiddenPrs();
+  announce(hide ? `#${number} hidden until it changes` : `#${number} shown again`);
+  renderScope();
+}
 
 function applyTheme() {
   const { palette, mode } = themeFor(
@@ -1318,6 +1407,7 @@ async function ensureView() {
   }
   if (wantedView !== path) return; // another view was asked for meanwhile
   packages = found.map((p) => withRunStamps(p, checkedAt));
+  pruneHidden(packages);
   shownView = path;
 }
 
@@ -1373,6 +1463,11 @@ function loadMerge() {
     .then((res) => (res.ok ? res.json() : { prs: [] }))
     .then((data) => {
       mergeList = data.prs || [];
+      // Hidden PRs that changed, or left the list: not hidden anymore.
+      const now = new Map(mergeList.map((p) => [String(p.number), prPrint(p)]));
+      for (const number of Object.keys(hiddenPrPrints))
+        if (now.get(number) !== hiddenPrPrints[number]) delete hiddenPrPrints[number];
+      saveHiddenPrs();
       update({ keepPage: true });
     })
     .catch(() => {
@@ -1408,7 +1503,15 @@ function mergeHtml(path, handle) {
     )
     .sort((a, b) => own(b) - own(a) || Boolean(b.vulnerable) - Boolean(a.vulnerable));
   if (!prs.length) return '';
-  const shown = mergeAll ? prs : prs.slice(0, MERGE_SHOWN);
+  // Those hidden here (Hide), left out unless shown again, greyed.
+  const hiddenN = prs.filter(isPrHidden).length;
+  const listed = showHiddenPrs ? prs : prs.filter((p) => !isPrHidden(p));
+  const hiddenToggle = hiddenN
+    ? html`<button type="button" class="merge-hidden-toggle" aria-pressed="${showHiddenPrs}" title="PRs you hid here, in this browser, until they change (a newer version, or a CVE)">${fmt(hiddenN)} hidden · ${showHiddenPrs ? 'hide them' : 'show them'}</button>`
+    : '';
+  if (!listed.length)
+    return html`<section class="merge-block merge-all-hidden"><p class="merge-how">You've hidden ${hiddenN === 1 ? 'the PR' : html`the ${fmt(hiddenN)} PRs`} ready to merge here. ${hiddenToggle}</p></section>`;
+  const shown = mergeAll ? listed : listed.slice(0, MERGE_SHOWN);
   const days = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000));
   const waited = (iso) => {
     const d = days(iso);
@@ -1427,22 +1530,24 @@ function mergeHtml(path, handle) {
         html`<span class="merge-warn" title="Merged as it is, the package would still be outdated: worth updating the PR first">behind: upstream has ${p.behind}</span>`,
       team && `${people(p.who)} can merge it`,
     ].filter(Boolean);
-    return html`<li><a class="files-link" href="https://github.com/NixOS/nixpkgs/pull/${p.number}" target="_blank" rel="noopener">${p.title}</a> <span class="merge-n">#${p.number}</span><span class="merge-facts">${facts.map((f, i) => html`${i ? ' · ' : ''}${f}`)}</span></li>`;
+    const hidden = isPrHidden(p);
+    return html`<li${hidden ? raw(' class="is-hidden"') : ''}><a class="files-link" href="https://github.com/NixOS/nixpkgs/pull/${p.number}" target="_blank" rel="noopener">${p.title}</a> <span class="merge-n">#${p.number}</span><button type="button" class="merge-hide" data-pr="${p.number}" title="${hidden ? 'Shown again here' : 'Leave it out of this list, in this browser only, until it changes: a newer version in its title, or a CVE'}">${hidden ? 'Show it again' : 'Hide'}</button><span class="merge-facts">${facts.map((f, i) => html`${i ? ' · ' : ''}${f}`)}</span></li>`;
   };
+  const n = listed.length;
   const what = mine
-    ? html`You can merge ${prs.length === 1 ? 'this PR' : html`these ${fmt(prs.length)} PRs`}`
-    : html`${fmt(prs.length)} PR${prs.length === 1 ? '' : 's'} on the team's packages, ready to merge`;
+    ? html`You can merge ${n === 1 ? 'this PR' : html`these ${fmt(n)} PRs`}`
+    : html`${fmt(n)} PR${n === 1 ? '' : 's'} on the team's packages, ready to merge`;
   // The merge bot also asks that whoever comments be in
   // @NixOS/nixpkgs-maintainers (nixpkgs' ci/README.md): not public, so said.
   const why = mine
     ? 'CI passed, and you maintain every package it touches: if you’re in @NixOS/nixpkgs-maintainers, the merge bot merges it for you'
     : 'CI passed, and the people named under each maintain every package it touches: the merge bot merges it for any of them in @NixOS/nixpkgs-maintainers';
   const more =
-    prs.length > MERGE_SHOWN
-      ? html`<button type="button" class="merge-more">${mergeAll ? 'Show fewer' : `Show all ${fmt(prs.length)}`}</button>`
+    listed.length > MERGE_SHOWN
+      ? html`<button type="button" class="merge-more">${mergeAll ? 'Show fewer' : `Show all ${fmt(listed.length)}`}</button>`
       : '';
   return html`<section class="merge-block" aria-labelledby="mergeHead">
-    <h3 id="mergeHead">${what} <span class="scope-hint">${why}</span></h3>
+    <h3 id="mergeHead">${what} <span class="scope-hint">${why}</span> ${hiddenToggle}</h3>
     <ul class="merge-list">${shown.map(line)}</ul>
     ${more}
     <p class="merge-how">Review it, then comment on the PR: <code>${MERGE_COMMAND}</code>
@@ -1568,7 +1673,7 @@ function setFavicon(base) {
 function renderStats() {
   // Counts follow the platform and list filters, so "outdated" means
   // outdated on Darwin, or on the gaming-team list, while that's selected.
-  const base = packages.filter((p) => inPlatform(p) && inList(p) && inPeople(p));
+  const base = packages.filter((p) => inPlatform(p) && inList(p) && inPeople(p) && notHidden(p));
   setFavicon(base);
   renderLists();
   // With every package, the counts are the list's tiles (renderScope), and
@@ -1723,6 +1828,22 @@ function renderLists() {
 
 // The packages the table shows, in order: a row's data-i is its place here.
 let shown = [];
+// Packages one update moves together, folded into one row (foldFamilies):
+// the folds of the list drawn (lead's name → its fold), the names shown
+// behind an open one's lead, and the folds opened (by key, until reload).
+let folds = new Map();
+let inOpenFold = new Set();
+const openFolds = new Set();
+
+// A fold's lead: how many more it stands for, a button showing or folding
+// them.
+function foldButton(pkg) {
+  const fold = folds.get(pkg.name);
+  if (!fold) return '';
+  const more = fold.members.length - 1;
+  const label = familyLabel(fold.members.map((m) => m.name)) || `${pkg.name} and the like`;
+  return html`<button type="button" class="fold-btn" data-fold="${fold.key}" aria-expanded="${fold.open}" title="${fmt(more + 1)} packages one update moves together (${label}): ${fold.open ? 'fold them into one row' : 'show them all'}">${fold.open ? `fold ${fmt(more)}` : `+${fmt(more)} like it`}</button>`;
+}
 
 const CHEVRON = raw(
   '<svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
@@ -1730,8 +1851,8 @@ const CHEVRON = raw(
 
 function rowHtml(pkg, i) {
   const st = computeStatus(pkg);
-  return html`<tr class="row" tabindex="0" data-i="${i}">
-      <td class="c-name"><div class="pkg-name"><span class="who"><span class="status-dot ${waitingForChannel(pkg) ? 'merged' : st}" role="img" aria-label="${waitingForChannel(pkg) ? DOT_TITLE.merged : DOT_TITLE[st]}" title="${waitingForChannel(pkg) ? DOT_TITLE.merged : DOT_TITLE[st]}"></span><span class="n">${breakableName(pkg.name)} ${ageTag(pkg, st)}</span></span>${platformTags(pkg)}</div></td>
+  return html`<tr class="row${isHidden(pkg) ? ' is-hidden' : ''}${inOpenFold.has(pkg.name) ? ' fold-member' : ''}" tabindex="0" data-i="${i}">
+      <td class="c-name"><div class="pkg-name"><span class="who"><span class="status-dot ${waitingForChannel(pkg) ? 'merged' : st}" role="img" aria-label="${waitingForChannel(pkg) ? DOT_TITLE.merged : DOT_TITLE[st]}" title="${waitingForChannel(pkg) ? DOT_TITLE.merged : DOT_TITLE[st]}"></span><span class="n">${breakableName(pkg.name)} ${ageTag(pkg, st)}</span></span>${platformTags(pkg)}${foldButton(pkg)}</div></td>
       <td class="c-ver ver mono">${versionCell(pkg, st)}</td>
       <td class="c-gh${pkg.openPRs || pkg.openIssues ? '' : ' quiet'}">${githubLinks(pkg)}</td>
       <td class="c-build">${buildCell(pkg)}</td>
@@ -1809,6 +1930,8 @@ async function render(list, { keepPage = false, run = updateRun } = {}) {
     writeViewToUrl();
     return;
   }
+  // One update moving many packages: one row (foldFamilies), alike by dot.
+  ({ list, folds, inOpen: inOpenFold } = foldFamilies(list, computeStatus, openFolds));
   const pages = Math.max(1, Math.ceil(list.length / pageSize));
   pageNum = keepPage ? Math.min(pageNum, pages) : 1;
   writeViewToUrl();
@@ -2290,7 +2413,7 @@ function overviewHtml() {
       ${teamPicker('Browse a team…')}
     </div>
     <p class="find-more">or <a class="files-link" href="${scopeHref({ view: 'maintainers' })}" data-card-view="maintainers">browse every maintainer</a></p>
-    <div class="overview-more">${highlightsHtml()}${causesHtml()}${fixedHtml()}${setsHtml(sets)}</div>`;
+    <div class="overview-more">${highlightsHtml()}${causesHtml()}${fixedHtml()}${setsHtml(sets)}${numbersHtml()}</div>`;
 }
 
 // The overview's recently fixed (the manifest's "fixed", from history.json):
@@ -2347,6 +2470,68 @@ const SET_BAR_TITLE =
 // The overview's sets updated in bulk: each one's size, what updates it,
 // and how much of it is failing, marked broken or outdated (a bar, in
 // their colours).
+// The overview's last section, "nixpkgs in numbers": figures for the
+// curious, out of the way of the lists above (the manifest's "numbers",
+// datastore.numbers; "merge", prs_digest.merge_summary; the sources' PR and
+// queue counts). Each says what it means, and opens its list when there is
+// one. Only those the data has.
+function numbersHtml() {
+  const n = manifest.numbers;
+  if (!n) return '';
+  const m = manifest.merge;
+  const prs = sources?.prs;
+  const queue = sources?.queue;
+  const link = (href, text) => html` <a class="files-link" href="${href}">${text} →</a>`;
+  const items = [
+    prs?.prs != null && [
+      fmt(prs.prs),
+      'open PRs',
+      `in nixpkgs, and ${fmt(prs.issues)} open issues`,
+    ],
+    m?.prs != null && [
+      fmt(m.prs),
+      'ready for the merge bot',
+      html`PRs waiting for their own maintainers (${fmt(m.maintainers)} people could each merge one), ${fmt(m.over90)} for over three months. Yours: "You can merge these", on <a class="files-link" href="${scopeHref({ view: 'maintainers' })}" data-card-view="maintainers">your page</a>`,
+    ],
+    [
+      fmt(n.behind),
+      'update PRs behind upstream',
+      'upstream has moved on since they were opened: merged as they are, the package would still be outdated',
+    ],
+    queue?.cycleDays != null && [
+      `${queue.cycleDays} days`,
+      "the update bot's round",
+      'how long nixpkgs-update takes to go through its whole queue, trying each package once',
+    ],
+    // The top card's failing builds (counts.failingBuilds), split by kind.
+    [
+      fmt(n.failing + (n.blocked || 0) + (n.unfinished || 0)),
+      'builds not built on Hydra',
+      `${fmt(n.failing)} failing themselves · ${fmt(n.blocked || 0)} blocked by a failing dependency · ${fmt(n.unfinished || 0)} unfinished (timed out or aborted) · of ${fmt(n.builds)} in master's evaluation, every platform, sets included`,
+    ],
+    manifest.views?.unbuilt != null && [
+      fmt(manifest.views.unbuilt),
+      'not built where listed',
+      html`nixpkgs lists them for a platform Hydra doesn't build them on${link(scopeHref({ view: 'unbuilt' }), 'see them')}`,
+    ],
+    manifest.counts?.tracked > 0 && [
+      `${Math.round((100 * (manifest.counts.tracked - manifest.counts.outdated)) / manifest.counts.tracked)}%`,
+      'up to date',
+      `of the ${fmt(manifest.counts.tracked)} packages outside the sets: nixpkgs has the newest version (${fmt(manifest.counts.outdated)} outdated)`,
+    ],
+    [
+      fmt(n.unmaintained),
+      'without a maintainer',
+      html`packages outside the sets nobody maintains${link('?maintainer=none', 'see them')}`,
+    ],
+  ].filter(Boolean);
+  return html`<h2 class="scope-label">nixpkgs in numbers</h2>
+    <div class="numbers">${items.map(
+      ([value, label, what]) =>
+        html`<div class="number"><span class="number-v">${value}</span><span class="number-l">${label}</span><span class="number-what">${what}</span></div>`,
+    )}</div>`;
+}
+
 function setsHtml(sets) {
   if (!sets.length) return '';
   const pct = (n, of) => (of ? Math.min(100, (100 * n) / of) : 0).toFixed(1);
@@ -2383,7 +2568,13 @@ function listHeaderHtml() {
   const path = shownView || '';
   // The tiles count the view shown, with the platform, list and team
   // filters, as the count chips do (renderStats).
-  const base = packages.filter((p) => inPlatform(p) && inList(p) && inPeople(p) && inSet(p));
+  const base = packages.filter(
+    (p) => inPlatform(p) && inList(p) && inPeople(p) && inSet(p) && notHidden(p),
+  );
+  // Hidden here ("Hide until it changes"), by the same filters.
+  const hiddenHere = packages.filter(
+    (p) => inPlatform(p) && inList(p) && inPeople(p) && inSet(p) && isHidden(p),
+  ).length;
   const shownCount = base.filter((p) => refined(p)).length;
   const tiles = Object.entries(TILES).map(([key, label]) => {
     const count = base.filter((p) => FILTERS[key].test(p) && refined(p, key)).length;
@@ -2410,14 +2601,29 @@ function listHeaderHtml() {
                 ? 'Marked broken'
                 : path === 'views/blocked.json'
                   ? 'Blocked by a dependency'
-                  : path === 'views/backport.json'
-                    ? 'Fixes to backport'
-                    : 'Needs attention';
+                  : path === 'views/unbuilt.json'
+                    ? 'Not built where listed'
+                    : path === 'views/backport.json'
+                      ? 'Fixes to backport'
+                      : 'Needs attention';
   return html`<h2 class="sr-only">${what}</h2>
     <div class="scope-view">
       <span class="scope-label">Showing</span>
       <span class="view-chip">${what} · ${fmt(shownCount)}<a class="view-x" href="${scopeHref({})}" data-scope-home aria-label="Back to the overview" title="Back to the overview">✕</a></span>
+      ${
+        hiddenHere
+          ? html`<button type="button" class="hidden-toggle" aria-pressed="${showHidden}" title="Packages you hid here, in this browser, until what they need attention for changes">${fmt(hiddenHere)} hidden · ${showHidden ? 'hide them' : 'show them'}</button>`
+          : ''
+      }
       ${path.startsWith('views/cause/') && causeShown ? html`<span class="scope-hint cause-line" title="The error line these builds share (paths, numbers and names vary)"><code>${causeShown.line}</code></span>` : ''}
+      ${
+        // Marked broken's neighbour: listed for a platform, never built there.
+        path === 'views/broken.json' && manifest.views?.unbuilt
+          ? html`<a class="scope-hint files-link" href="${scopeHref({ view: 'unbuilt' })}" title="Packages nixpkgs lists for a platform Hydra doesn't build them on: usually a dependency isn't available there">also: ${fmt(manifest.views.unbuilt)} not built where listed →</a>`
+          : path === 'views/unbuilt.json'
+            ? html`<span class="scope-hint">listed for a platform Hydra doesn't build them on (struck tags); pick a platform to see its own</span>`
+            : ''
+      }
       ${path.startsWith('views/set/') ? html`<span class="scope-hint">${bulkText(setFilter)}${profileOf(setFilter) ? html` (<a class="files-link" href="${safeUrl(profileOf(setFilter).link)}" target="_blank" rel="noopener">in nixpkgs ↗</a>)` : ''}</span>` : ''}
       ${teamPicker('Any team')}${teamOutChips()}
     </div>
@@ -2654,6 +2860,19 @@ document.getElementById('content').addEventListener('click', (e) => {
   const copy = e.target.closest('.vcopy');
   if (copy) {
     copyTitle(copy);
+    return;
+  }
+  const fold = e.target.closest('button.fold-btn');
+  if (fold) {
+    // Shown or folded again, the keyboard back on the same button.
+    const key = fold.dataset.fold;
+    if (openFolds.has(key)) openFolds.delete(key);
+    else openFolds.add(key);
+    update({ keepPage: true }).then(() =>
+      [...document.querySelectorAll('button.fold-btn')]
+        .find((b) => b.dataset.fold === key)
+        ?.focus(),
+    );
     return;
   }
   const plat = e.target.closest('button.plat');
@@ -3344,17 +3563,41 @@ function fillBuilds(pkg, el) {
 function platformTags(pkg) {
   const pl = pkg.platforms;
   if (pl === undefined) return '';
-  if (pl === null)
+  // No restriction: "any platform", unless Hydra doesn't build it
+  // somewhere, which the chips then say as for a listed platform (fzssh:
+  // Linux, not Darwin; 334 such on 2026-10-19).
+  const any = pl === null;
+  if (any && !unbuiltWhere(pkg).length)
     return html`<span class="plats"><span class="plat any" title="nixpkgs doesn't restrict its platforms">any platform</span></span>`;
+  const listed = pl || { linux: true, darwin: true };
   const linux = LINUX_SYSTEMS.filter((s) => onPlatform(pkg, s));
-  const keys = [
-    ...(pl.linux ? [linux.length === 1 ? linux[0] : 'linux'] : []),
-    ...(pl.darwin ? ['darwin'] : []),
-  ];
-  const tags = keys.map((key) => {
+  // Each chip: its platform, and whether Hydra builds it there
+  // (unbuiltOn: listed, not built). On both Linux systems with one not
+  // built, they split: "Linux x86_64 · aarch64", the latter struck.
+  const chips = [];
+  if (listed.linux) {
+    const built = linux.filter((s) => !unbuiltOn(pkg, s));
+    if (linux.length === 2 && built.length === 1) {
+      const missing = linux.find((s) => s !== built[0]);
+      chips.push([built[0], false], [missing, true, missing.split('-')[0]]);
+    } else {
+      const key = linux.length === 1 ? linux[0] : 'linux';
+      chips.push([key, unbuiltOn(pkg, key)]);
+    }
+  }
+  if (listed.darwin) chips.push(['darwin', unbuiltOn(pkg, 'darwin')]);
+  const tags = chips.map(([key, unbuilt, short]) => {
     const p = PLATFORMS[key];
-    return html`<button class="plat" type="button" data-platform="${key}" aria-pressed="${platformFilter === key}"
-      title="${p.title}. ${platformFilter === key ? 'Show all platforms' : `Click to show only packages available on ${p.label}`}">${p.label}</button>`;
+    const where = any
+      ? "nixpkgs doesn't restrict its platforms"
+      : `Listed for ${p.label} in nixpkgs`;
+    const said = unbuilt
+      ? `${where}, but Hydra doesn't build it on ${p.label}: no build exists there, usually because a dependency isn't available on ${p.label}`
+      : any
+        ? `${p.title} (nixpkgs doesn't restrict its platforms)`
+        : p.title;
+    return html`<button class="plat${unbuilt ? ' unbuilt' : ''}" type="button" data-platform="${key}" aria-pressed="${platformFilter === key}"
+      title="${said}. ${platformFilter === key ? 'Show all platforms' : `Click to show only packages available on ${p.label}`}">${short || p.label}${unbuilt ? html`<span class="sr-only"> (not built by Hydra)</span>` : ''}</button>`;
   });
   // Together, so they wrap as one.
   return tags.length ? html`<span class="plats">${tags}</span>` : '';
@@ -3457,12 +3700,16 @@ function githubSection(pkg) {
   const KIND = {
     drop: (other) => {
       const attr = /^([\w.+-]+):/.exec(other.title)?.[1];
-      return fact(
-        'warn',
-        attr && attr.toLowerCase() !== pkg.name.toLowerCase()
-          ? `removes ${attr} from nixpkgs`
-          : 'removes it from nixpkgs',
-      );
+      const what = attr && attr.toLowerCase() !== pkg.name.toLowerCase() ? attr : 'it';
+      // Only proposed (changes requested, or no activity for months): said
+      // quietly, no "being removed" badge in the list.
+      return other.proposed
+        ? fact(
+            '',
+            `removal proposed (${other.proposed})`,
+            `This PR would remove ${what} from nixpkgs, but it doesn't look likely to be merged as it is`,
+          )
+        : fact('warn', `removes ${what} from nixpkgs`);
     },
     init: () => fact('', 'adds it'),
     update: () => fact('', 'an update'),
@@ -3933,8 +4180,9 @@ function fillDetail(pkg, el, entries) {
     }
     ${githubSection(pkg)}
     ${people.length ? html`<div class="pd-people">${people}</div>` : ''}
-    <div class="pd-links">${links}<button type="button" class="pd-why" aria-expanded="${open}">${icon('chevron-down')}Why?</button></div>
+    <div class="pd-links">${links}<button type="button" class="pd-why" aria-expanded="${open}">${icon('chevron-down')}Why?</button>${hideButton(pkg)}</div>
   </div>`;
+  el.querySelector('.pd-hide')?.addEventListener('click', () => setHidden(pkg, !isHidden(pkg)));
   const why = el.querySelector('.pd-why');
   why.addEventListener('click', () => {
     const body = el.querySelector('.pd-why-body');
@@ -3975,6 +4223,20 @@ function fillDetail(pkg, el, entries) {
   });
 }
 
+// The panel's "Hide until it changes" (or "Show it again" while hidden):
+// for something that needs attention, kept in this browser.
+function hideButton(pkg) {
+  const hidden = isHidden(pkg);
+  // Something to hide: what the list's tiles count as needing attention.
+  const needs = ['warn', 'builds', 'updates', 'vuln', 'broken'].some((k) => FILTERS[k]?.test(pkg));
+  if (!hidden && !needs) return '';
+  return html`<button type="button" class="pd-hide" title="${
+    hidden
+      ? 'Shown again in your lists'
+      : 'Leave it out of your lists, in this browser only, until what it needs attention for changes (a newer version, another failing build, a new CVE). Wrong for everyone? Report it, or add a community rule'
+  }">${hidden ? 'Show it again' : 'Hide until it changes'}</button>`;
+}
+
 // How many repositories a panel shows before "Show all".
 const COMPARED_SHOWN = 8;
 
@@ -3986,6 +4248,7 @@ function currentFiltered() {
       inList(p) &&
       inPeople(p) &&
       inSet(p) &&
+      notHidden(p) &&
       refined(p) &&
       FILTERS[activeFilter].test(p) &&
       matchesSearch(p, q),
@@ -4082,9 +4345,26 @@ document.getElementById('scope')?.addEventListener('click', (e) => {
     renderScope();
     return;
   }
+  if (e.target.closest('button.hidden-toggle')) {
+    showHidden = !showHidden;
+    update({ keepPage: true });
+    return;
+  }
   const copy = e.target.closest('button.merge-copy');
   if (copy) {
     copyTitle(copy);
+    return;
+  }
+  const hidePr = e.target.closest('button.merge-hide');
+  if (hidePr) {
+    const number = Number(hidePr.dataset.pr);
+    const pr = (mergeList || []).find((p) => p.number === number);
+    if (pr) setPrHidden(number, !isPrHidden(pr));
+    return;
+  }
+  if (e.target.closest('button.merge-hidden-toggle')) {
+    showHiddenPrs = !showHiddenPrs;
+    renderScope();
     return;
   }
   if (e.target.closest('button.merge-more')) {

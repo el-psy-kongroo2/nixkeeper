@@ -77,6 +77,7 @@ export const VIEWS = {
   broken: 'views/broken.json',
   blocked: 'views/blocked.json',
   backport: 'views/backport.json',
+  unbuilt: 'views/unbuilt.json',
   maintainers: 'maintainers',
 };
 export function viewPath({
@@ -194,6 +195,64 @@ export function onPlatform(pkg, key) {
 // A build is on platform: its system, or any system of that family.
 const onSystem = (system, platform) =>
   platform.includes('-') ? system === platform : system.endsWith(`-${platform}`);
+
+// Listed for key (a family or a system) but not built there by Hydra: none
+// of its builds there exists ("notBuilt": no job, usually as a dependency
+// isn't available there, so the job fails to evaluate and Hydra drops it),
+// while Hydra builds it elsewhere (not a package Hydra skips altogether:
+// unfree, or kept off it). 1,659 Darwin listings on 2026-10-19, juce's and
+// driftnet's among them.
+export function unbuiltOn(pkg, key) {
+  const here = (pkg.builds || []).filter((b) => onSystem(b.system, key));
+  return (
+    here.length > 0 &&
+    here.every((b) => b.status === 'notBuilt') &&
+    (pkg.builds || []).some((b) => !onSystem(b.system, key) && b.status !== 'notBuilt')
+  );
+}
+
+// What a package needs attention for, as one string: hidden ("Hide until
+// it changes") while it stays the same. Its status, the version it's
+// outdated against, each failing build (system and status), the update
+// bot's outcome and why it failed, its counted CVEs, and nixpkgs' broken
+// mark: any of them changing (1.3 out after 1.2 was hidden, a new failing
+// system, a new CVE) brings it back. A vulnerable package's has the sync's
+// time too (checkedAt): a CVE comes back at the next sync, never hidden
+// for long.
+export function attentionPrint(pkg, checkedAt = '') {
+  const failing = (pkg.builds || [])
+    .filter((b) => b.status === 'failed' || b.status === 'dependency')
+    .map((b) => `${b.system}:${b.status}`)
+    .sort();
+  return JSON.stringify([
+    computeStatus(pkg),
+    pkg.refVersion || '',
+    failing,
+    pkg.updateFailure ? [pkg.update?.outcome || '', pkg.update?.failedBecause || ''] : [],
+    // The list's entry has vuln, the full row vulnerabilities: the same
+    // count either way (vulnSummary), so a panel's hide matches the list.
+    vulnSummary(pkg)?.n || (pkg.nixVulnerable ? 1 : 0),
+    Boolean(pkg.markedBroken),
+    isVulnerable(pkg) ? checkedAt || '' : '',
+  ]);
+}
+
+// What a PR of "You can merge these" is, as one string: hidden there
+// ("Hide") while it stays the same. Its title, which the update bot
+// rewrites when it pushes a newer version ("foo: 1.2 -> 1.4"), and whether
+// it's for a vulnerable package. Not upstream moving on ("behind"): a PR
+// held back on purpose stays hidden through new releases.
+export function prPrint(pr) {
+  return JSON.stringify([pr.title, Boolean(pr.vulnerable)]);
+}
+
+// The systems pkg is listed for but not built on (unbuiltOn), each Linux
+// system apart, Darwin as one: [] when Hydra builds it everywhere listed.
+export function unbuiltWhere(pkg) {
+  return ['x86_64-linux', 'aarch64-linux', 'darwin'].filter(
+    (key) => onPlatform(pkg, key) && unbuiltOn(pkg, key),
+  );
+}
 
 // Follows Repology's statuses, but "legacy" (an older version nixpkgs keeps
 // beside a newer one under another attribute: tracy_0_11 beside tracy) isn't
@@ -883,4 +942,52 @@ export function midway(pkg) {
     compareVersions(master, target) < 0
     ? master
     : null;
+}
+
+// Packages one update moves together (the sync's family: the same file,
+// version and homepage, rows.add_families) as the list folds them: at the
+// same status and target version, and also alike by key(pkg) (the list's
+// dot), FOLD_MIN or more of them in the list are one row, the first in the
+// list's order (the most pressing), with the others behind it; or, when
+// their fold is in open (by its key), the others right after it. Returns
+// {list, folds: lead's name → {key, members, open}, inOpen: the names shown
+// behind an open fold's lead}.
+export const FOLD_MIN = 3;
+export function foldFamilies(list, key = () => '', open = new Set()) {
+  const keyOf = (pkg) =>
+    pkg.family ? [pkg.family, pkg.nixStatus, targetVersion(pkg) ?? '', key(pkg)].join('|') : null;
+  const groups = new Map();
+  for (const pkg of list) {
+    const k = keyOf(pkg);
+    if (k) groups.set(k, [...(groups.get(k) ?? []), pkg]);
+  }
+  const out = [];
+  const folds = new Map();
+  const inOpen = new Set();
+  for (const pkg of list) {
+    const k = keyOf(pkg);
+    const members = k && groups.get(k);
+    if (!members || members.length < FOLD_MIN) out.push(pkg);
+    else if (members[0] === pkg) {
+      folds.set(pkg.name, { key: k, members, open: open.has(k) });
+      out.push(pkg);
+      if (open.has(k)) {
+        for (const m of members.slice(1)) inOpen.add(m.name);
+        out.push(...members.slice(1));
+      }
+    }
+  }
+  return { list: out, folds, inOpen };
+}
+
+// What a family's members are called together (rows.family_label): the one
+// name they all end in (a kernel module once per kernel); else their names'
+// common start and a "*" ("python313Packages.huaweicloudsdk*"); null when
+// they share fewer than 4 characters.
+export function familyLabel(names) {
+  const ends = new Set(names.map((n) => n.split('.').pop()));
+  if (ends.size === 1) return [...ends][0];
+  let start = names[0] ?? '';
+  for (const n of names) while (!n.startsWith(start)) start = start.slice(0, -1);
+  return start.length >= 4 ? `${start}*` : null;
 }

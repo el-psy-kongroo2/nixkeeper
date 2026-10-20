@@ -324,6 +324,7 @@ select:focus-visible,
 .row:focus-visible,
 .failure-btn:focus-visible,
 button.plat:focus-visible,
+.fold-btn:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -1062,6 +1063,43 @@ button.checked:focus-visible {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+/* The overview's "nixpkgs in numbers" (numbersHtml). */
+.numbers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+@media (max-width: 900px) {
+  .numbers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.number {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.number-v {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.number-l {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.number-what {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
 .set-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1212,6 +1250,40 @@ button.checked:focus-visible {
   display: block;
   color: var(--ink-soft);
   font-size: 12.5px;
+}
+/* "You can merge these"'s Hide (setPrHidden) and its "N hidden" toggle. */
+.merge-hide {
+  margin-left: 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-faint);
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  min-height: 24px;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.merge-hide:hover {
+  color: var(--ink);
+}
+.merge-hidden-toggle {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: 999px;
+  padding: 1px 9px;
+  cursor: pointer;
+}
+.merge-hidden-toggle[aria-pressed="true"] {
+  border-style: solid;
+  color: var(--ink);
+}
+.merge-list li.is-hidden {
+  opacity: 0.5;
 }
 .merge-warn {
   color: var(--warn);
@@ -1528,6 +1600,12 @@ tbody tr.row td {
 button.plat {
   cursor: pointer;
 }
+/* Listed for the platform, not built there by Hydra (unbuiltOn). */
+.plat.unbuilt {
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-faint);
+  opacity: 0.6;
+}
 button.plat:hover {
   color: var(--ink);
   text-decoration: underline;
@@ -1536,6 +1614,34 @@ button.plat:hover {
 button.plat[aria-pressed="true"] {
   color: var(--accent);
   font-weight: 600;
+}
+/* A fold's lead (foldButton): how many more packages the same update
+   moves, a button showing them; 24 px tall, like every tap target. */
+.fold-btn {
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.fold-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.fold-btn[aria-expanded="true"] {
+  color: var(--accent);
+}
+/* The packages an open fold shows, after its lead: set in under it. */
+.row.fold-member .c-name {
+  box-shadow: inset 3px 0 0 var(--hairline-strong);
+}
+.row.fold-member .pkg-name {
+  padding-left: 32px;
 }
 .plat-filter {
   font: inherit;
@@ -2263,6 +2369,42 @@ tbody tr.row.open td {
   display: none;
 }
 /* "Why?": the explanation's toggle, at the end of the links. */
+/* "Hide until it changes" (hideButton), after "Why?". */
+.pd-hide {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  padding: 3px 9px;
+  min-height: 24px;
+  cursor: pointer;
+}
+.pd-hide:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+/* The scope's "5 hidden · show them". */
+.hidden-toggle {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.hidden-toggle[aria-pressed="true"] {
+  border-style: solid;
+  color: var(--ink);
+}
+/* A hidden package, while "show them" is on. */
+tr.row.is-hidden {
+  opacity: 0.5;
+}
 .pd-why {
   margin-left: auto;
   display: inline-flex;
