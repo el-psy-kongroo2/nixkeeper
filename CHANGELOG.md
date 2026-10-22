@@ -25,6 +25,17 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   package's maintainers, teams and platforms beside `names.json`, about
   120 KB compressed), loaded on the first search.
 
+### Changed
+
+- The line by the logo and the tab's title: "health of every nixpkgs
+  package", as nixkeeper.com covers all of nixpkgs now; and the
+  description (page, flake, package), in nixpkgs' style (no article, no
+  final period): "Health dashboard for every nixpkgs package: new
+  releases, build and update failures, vulnerabilities and open PRs, by
+  maintainer and team". An instance of its own lists says "health of your
+  nixpkgs packages" (set once its data loads; link previews show
+  index.html's).
+
 ## [0.21.0] - 2026-10-21
 
 Fewer packages wrongly shown as outdated, over 400 of them: snapshots
