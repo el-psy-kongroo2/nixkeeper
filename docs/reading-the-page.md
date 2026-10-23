@@ -102,9 +102,12 @@ clicking its build or update cell opens that panel instead. Several can be
 open at once, each closing on its own; with two or more open, **Close all**
 beside the list's count, or Esc, closes them. A package's name is a link to
 it alone (`?pkg=`): Ctrl/Cmd-click or middle-click opens it in a tab of its
-own. Its **Open on GitHub** cell
-counts the open nixpkgs PRs and issues with its name in the title, each
-with GitHub's icon and a link to that search ("—" when there are none).
+own. Its **Open on GitHub** cell counts the open nixpkgs PRs about it
+(titled with its name, as nixpkgs' convention has it: "pkg: 2.7.5 ->
+2.8.2") and the issues with its name in their title, each with GitHub's
+icon and a link to GitHub's search ("—" when there are none). The search
+matches words, so for a name that's also a word (pkg, linux) it shows more,
+as its hover says.
 
 **Opening a list.** At the top of every page:
 
