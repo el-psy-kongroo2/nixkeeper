@@ -991,3 +991,113 @@ export function familyLabel(names) {
   for (const n of names) while (!n.startsWith(start)) start = start.slice(0, -1);
   return start.length >= 4 ? `${start}*` : null;
 }
+
+// The package set a name is in, by its attribute's first part
+// (python313Packages for python313Packages.requests, vimPlugins for
+// vimPlugins.nvim-treesitter-parsers.lua); TOP_LEVEL for a top-level one
+// (ripgrep). The list's "In" filter (?in=).
+export const TOP_LEVEL = 'top-level';
+export function nameSet(name) {
+  const dot = name.indexOf('.');
+  return dot < 0 ? TOP_LEVEL : name.slice(0, dot);
+}
+
+// How many of list have each value of key(pkg) (one or several values):
+// [[value, count]], the most first, ties by name (any case). A list's
+// filter counts. Names compared as plain lowercase strings: localeCompare
+// over a view's 2,900 maintainers took 50 ms a sort (2026-10-22).
+export function facetCounts(list, key) {
+  const counts = new Map();
+  for (const pkg of list) {
+    const found = key(pkg);
+    for (const value of Array.isArray(found) ? found : [found]) {
+      if (value != null) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+  }
+  return [...counts]
+    .map(([value, n]) => [value, n, value.toLowerCase()])
+    .sort((a, b) => b[1] - a[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0))
+    .map(([value, n]) => [value, n]);
+}
+
+// A name index entry's status ([name, letter, set?]: datastore.status's
+// letter, then v when vulnerable), as the search's "Status" filter names
+// it (?status=); vulnerable is any letter with a v.
+export const NAME_STATUSES = {
+  failing: 'failing',
+  outdated: 'outdated',
+  waiting: 'waiting for the channel',
+  uptodate: 'up to date',
+  notcompared: "can't be compared",
+  vulnerable: 'vulnerable',
+};
+const LETTER_STATUS = {
+  f: 'failing',
+  m: 'waiting',
+  o: 'outdated',
+  u: 'uptodate',
+  n: 'notcompared',
+};
+export const nameStatusIs = (letter, status) =>
+  status === 'vulnerable' ? letter.endsWith('v') : LETTER_STATUS[letter[0]] === status;
+
+// facets.json's platform bits (datastore.FACET_SYSTEMS) for each of the
+// page's platforms: available there (any Linux system for linux).
+export const PLATFORM_BITS = { linux: 3, 'x86_64-linux': 1, 'aarch64-linux': 2, darwin: 4 };
+export const onBits = (bits, key) => (bits & PLATFORM_BITS[key]) !== 0;
+
+// facets.json decoded: for each entry of names.json (same order), its
+// {bits, handles (lowercase), teams}.
+export function decodeFacets({ handles = [], teams = [], rows = [] }) {
+  const lower = handles.map((h) => h.toLowerCase());
+  const none = [];
+  return rows.map((r) =>
+    typeof r === 'number'
+      ? { bits: r, handles: none, teams: none }
+      : {
+          bits: r[0],
+          handles: r[1].map((i) => lower[i]),
+          teams: (r[2] || none).map((i) => teams[i]),
+        },
+  );
+}
+
+// The search's matches in all of nixpkgs ([[name, letter, set?]]) narrowed
+// by what's picked: a package set (logic.nameSet's), a status (a
+// NAME_STATUSES key), and with facetsOf (an entry's decodeFacets object, or
+// undefined while facets.json loads) a maintainer (lowercase handle), a
+// team and a platform (a PLATFORM_BITS key). {kept, sets, statuses, by,
+// teams, platforms}: each facet counted with the others picked
+// (facetCounts' [[value, count]]; statuses in NAME_STATUSES' order, those
+// with none left out; platforms {key: count}).
+export function matchFacets(matches, picked = {}, facetsOf = null) {
+  const { set = null, status = null, by = null, team = null, platform = null } = picked;
+  const of = (e) => (facetsOf && facetsOf(e)) || null;
+  const tests = {
+    set: ([name]) => !set || nameSet(name) === set,
+    status: ([, letter]) => !status || nameStatusIs(letter, status),
+    by: (e) => !by || !facetsOf || (of(e)?.handles || []).includes(by),
+    team: (e) => !team || !facetsOf || (of(e)?.teams || []).includes(team),
+    platform: (e) => !platform || !facetsOf || (of(e) ? onBits(of(e).bits, platform) : true),
+  };
+  const keys = Object.keys(tests);
+  const except = (skip) => matches.filter((e) => keys.every((k) => k === skip || tests[k](e)));
+  const sets = facetCounts(except('set'), ([name]) => nameSet(name));
+  const ofOthers = except('status');
+  const statuses = Object.keys(NAME_STATUSES)
+    .map((s) => [s, ofOthers.filter(([, letter]) => nameStatusIs(letter, s)).length])
+    .filter(([, n]) => n);
+  const found = { kept: except(null), sets, statuses };
+  if (facetsOf) {
+    found.by = facetCounts(except('by'), (e) => of(e)?.handles || []);
+    found.teams = facetCounts(except('team'), (e) => of(e)?.teams || []);
+    const near = except('platform');
+    found.platforms = Object.fromEntries(
+      Object.keys(PLATFORM_BITS).map((k) => [
+        k,
+        near.filter((e) => (of(e) ? onBits(of(e).bits, k) : true)).length,
+      ]),
+    );
+  }
+  return found;
+}

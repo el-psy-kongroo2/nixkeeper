@@ -11,6 +11,8 @@ import {
   dayPosition,
   daysText,
   daysUntil,
+  decodeFacets,
+  facetCounts,
   failedBecause,
   hasFailure as failureOn,
   familyLabel,
@@ -24,10 +26,13 @@ import {
   maintainersKeep,
   maintainersParam,
   matchesSearch,
+  matchFacets,
   midway,
   NAME_DOTS,
+  NAME_STATUSES,
   NEVER_BUILT,
   nameMatches,
+  nameSet,
   neverBuiltOn,
   nixkeeperEntry,
   olderThan,
@@ -48,6 +53,7 @@ import {
   severityRank,
   shardOf,
   shortAge,
+  TOP_LEVEL,
   targetVersion,
   teamsKeep,
   teamsParam,
@@ -130,12 +136,23 @@ let shardCount = 1;
 // page shows one view of the data at a time (viewPath): `packages` is that
 // view's, `manifest` index.json, with the counts of all of nixpkgs.
 let community = false;
+// The line by the logo on an instance of its own lists (index.html's is
+// for every package).
+const OWN_TAG = 'health of your nixpkgs packages';
 let manifest = null;
 let sources = null; // the daily sync's sources (index.json's "sources")
 let shownView = null; // the path of the view in `packages`
 let wantedView = null; // the one being loaded (the newest asked for wins)
 let names = null; // the name index (names.json), once loaded: [[name, status, set?]]
 let namesLoading = null;
+// facets.json, decoded (decodeFacets): each names entry's maintainers,
+// teams and platforms, by its position there (nameIndex), once loaded for
+// a search's filters. Null if it doesn't line up with names (a sync
+// between the two loads): the search then filters without them.
+let facetIndex = null;
+let facetsLoading = null;
+let nameIndex = null;
+const facetsOf = (entry) => facetIndex[nameIndex.get(entry)];
 // ?pkg=: one package alone (with every package); ?set=: a generated set;
 // ?view=: a list by name (attention, broken).
 let pkgParam = null;
@@ -165,6 +182,30 @@ let ageFilter = null;
 let becauseFilter = null;
 // ?buildFailed=: build failures for one reason (a BUILD_FAILED key).
 let buildFailedFilter = null;
+// ?in=: one package set, by the attribute's first part (logic.js nameSet:
+// python313Packages, vimPlugins, top-level); ?by=: one maintainer's
+// packages within the list shown (a handle, lowercase). Counted, with the
+// platforms, over the list's other filters (facetOptions).
+let inFilter = null;
+let byFilter = null;
+const inNameSet = (pkg) => !inFilter || nameSet(pkg.name) === inFilter;
+const byMaintainer = (pkg) =>
+  !byFilter || (pkg.maintainers || []).some((m) => m.toLowerCase() === byFilter);
+// ?status=: the search's matches in all of nixpkgs of one status (a
+// NAME_STATUSES key: what the name index's letter says). How many of them
+// are shown, more on asking (moreMatchesHtml), from MATCHES_SHOWN again
+// with another search or filter (matchQuery: what was asked).
+let statusFilter = null;
+// ?ofteam=: the matches of one team (its name as nixpkgs writes it); the
+// maintainer (?by=) and platform (?platform=) ones are the list's own.
+let matchTeam = null;
+const MATCHES_SHOWN = 50;
+const MATCHES_MORE = 200;
+let matchLimit = MATCHES_SHOWN;
+let matchQuery = '';
+// What every filter but the facets kept, last time the list was worked out
+// (currentFiltered): the facets count over it, with no second pass.
+let facetBase = [];
 let sortAZ = false; // default order puts what needs attention first
 // The table shows pageSize rows at a time: drawing stays fast whatever the
 // data's size, and the page keeps working with Ctrl+F and screen readers
@@ -454,7 +495,46 @@ function buildFailedPick() {
   )}</select></label>`;
 }
 
+// The facets' choices with how many each would show: each counted over
+// what the list's other filters keep (facetBase), its own left out (the
+// sets as with the maintainer and platform picked). The platforms: of
+// those, how many are on each (with a platform picked, the tiles' tests
+// stay its own: failing on Darwin, how many are on Linux too).
+const BY_SHOWN = 300; // the maintainers offered, the most first
+function facetOptions() {
+  const sets = facetCounts(
+    facetBase.filter((p) => byMaintainer(p) && inPlatform(p)),
+    (p) => nameSet(p.name),
+  );
+  const by = facetCounts(
+    facetBase.filter((p) => inNameSet(p) && inPlatform(p)),
+    (p) =>
+      (p.maintainers || []).length > 1
+        ? [...new Set(p.maintainers.map((m) => m.toLowerCase()))]
+        : (p.maintainers || []).map((m) => m.toLowerCase()),
+  );
+  const near = facetBase.filter((p) => inNameSet(p) && byMaintainer(p));
+  const picked = platformFilter;
+  const platforms = {};
+  for (const key of Object.keys(PLATFORMS)) {
+    platformFilter = key;
+    platforms[key] = near.filter(inPlatform).length;
+  }
+  platformFilter = picked;
+  return { sets, by: by.slice(0, BY_SHOWN), platforms };
+}
+
+// A facet's choice, with its count, selected when it's the one picked.
+const facetOption = (value, label, count, picked) =>
+  html`<option value="${value}"${picked === value ? raw(' selected') : ''}>${label} (${fmt(count)})</option>`;
+
 function refineHtml() {
+  const facets = facetOptions();
+  const setCount = (v) => facets.sets.find(([s]) => s === v)?.[1] || 0;
+  const sets =
+    inFilter && !facets.sets.some(([s]) => s === inFilter)
+      ? [...facets.sets, [inFilter, 0]]
+      : facets.sets;
   return html`<div class="refine" role="group" aria-label="Narrow the list">${Object.entries(
     REFINES,
   ).map(
@@ -470,12 +550,24 @@ function refineHtml() {
   ).map(
     ([key, label]) =>
       html`<option value="${key}"${ageFilter === key ? raw(' selected') : ''}>${label}</option>`,
-  )}</select></label>${buildFailedPick()}${becausePick()}<label class="refine-age" title="Only packages available on it, and of their builds the ones there (build failures on Darwin, say). Darwin is macOS, as nixpkgs calls it.">On <select data-platform-pick><option value="">any platform</option>${Object.entries(
+  )}</select></label>${buildFailedPick()}${becausePick()}<label class="refine-age" title="Only packages available on it, and of their builds the ones there (build failures on Darwin, say). Darwin is macOS, as nixpkgs calls it. Each with how many it would show.">On <select data-platform-pick><option value="">any platform</option>${Object.entries(
     PLATFORMS,
-  ).map(
-    ([key, p]) =>
-      html`<option value="${key}"${platformFilter === key ? raw(' selected') : ''}>${p.label}</option>`,
-  )}</select></label></div>`;
+  ).map(([key, p]) =>
+    facetOption(key, p.label, facets.platforms[key], platformFilter),
+  )}</select></label>${
+    sets.length > 1 || inFilter
+      ? html`<label class="refine-age" title="Only one package set, by the attribute's first part (python313Packages, vimPlugins), or the top-level packages. Each with how many it would show.">In <select data-in><option value="">any set</option>${sets.map(
+          ([v]) => facetOption(v, v === TOP_LEVEL ? 'top level' : v, setCount(v), inFilter),
+        )}</select></label>`
+      : ''
+  }${
+    // Not on a maintainer's own page: it's theirs already.
+    shownHandle()
+      ? ''
+      : html`<label class="refine-age" title="Only the packages this maintainer is listed for (meta.maintainers), within this list: type a GitHub handle. The ${fmt(facets.by.length)} with the most here are offered, each with how many.">By <input type="search" class="by-pick" data-by list="byOptions" placeholder="any maintainer" value="${byFilter || ''}" autocomplete="off" spellcheck="false"><datalist id="byOptions">${facets.by.map(
+          ([h, n]) => html`<option value="${h}">${fmt(n)}</option>`,
+        )}</datalist></label>`
+  }</div>`;
 }
 
 // The overview's build failures by where they fail (the manifest's
@@ -915,6 +1007,13 @@ function readViewFromUrl() {
   becauseFilter = /^[A-Za-z]{1,30}$/.test(updateFailed) ? updateFailed : null;
   const buildFailed = params.get('buildFailed') || '';
   buildFailedFilter = /^[A-Za-z]{1,30}$/.test(buildFailed) ? buildFailed : null;
+  const inSetParam = params.get('in') || '';
+  inFilter = /^[\w.+-]{1,100}$/.test(inSetParam) ? inSetParam : null;
+  const by = (params.get('by') || '').replace(/^@/, '').toLowerCase();
+  byFilter = /^[\w.-]{1,60}$/.test(by) ? by : null;
+  statusFilter = NAME_STATUSES[params.get('status')] ? params.get('status') : null;
+  const ofTeam = params.get('ofteam') || '';
+  matchTeam = /^[\w .+-]{1,60}$/.test(ofTeam) ? ofTeam : null;
   pageNum = Math.max(1, Number.parseInt(params.get('page'), 10) || 1);
   const per = Number(params.get('per'));
   pageSize = PAGE_SIZES.includes(per) ? per : DEFAULT_PAGE_SIZE;
@@ -943,6 +1042,10 @@ function viewQuery(page = pageNum) {
   set('age', ageFilter);
   set('buildFailed', buildFailedFilter);
   set('updateFailed', becauseFilter);
+  set('in', inFilter);
+  set('by', byFilter);
+  set('status', statusFilter);
+  set('ofteam', matchTeam);
   params.delete('because'); // the old name, written as the new one
   set('page', page > 1 ? page : '');
   set('per', pageSize !== DEFAULT_PAGE_SIZE ? pageSize : '');
@@ -1573,6 +1676,25 @@ function loadNames() {
     });
 }
 
+// The search's maintainer, team and platform filters' data (facets.json),
+// on first use: about 120 KB.
+function loadFacets() {
+  if (facetsLoading || !names) return;
+  facetsLoading = fetch(dataUrl('facets.json'), { cache: 'no-store' })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      const found = data ? decodeFacets(data) : [];
+      if (found.length === names.length) {
+        facetIndex = found;
+        nameIndex = new Map(names.map((entry, i) => [entry, i]));
+        update({ keepPage: true });
+      }
+    })
+    .catch(() => {
+      facetsLoading = null; // tried again with the next search
+    });
+}
+
 // Draw the list again after the view's state changed (a filter, the search,
 // the address): with every package, its view loaded first. keepPage: as
 // render's.
@@ -1642,6 +1764,11 @@ async function loadIndex() {
       loadMyCount();
     } else {
       packages = (await summaryOf()).map((p) => withRunStamps(p, checkedAt));
+      // An instance of its own lists, not every package: the line by the
+      // logo and the tab's title say so (index.html has nixkeeper.com's;
+      // link previews, which run no script, keep it).
+      document.querySelector('.wordmark .tag').textContent = OWN_TAG;
+      document.title = `nixkeeper — ${OWN_TAG}`;
     }
     // The nixkeeper that made the data, in the footer (older data has none).
     document.getElementById('version').textContent =
@@ -2657,6 +2784,10 @@ function scopeHref({ set = null, pkg = null, view = null, filter = null, cause =
     'view',
     'updateFailed',
     'buildFailed',
+    'in',
+    'by',
+    'status',
+    'ofteam',
   ])
     params.delete(k);
   if (set) params.set('set', set);
@@ -2686,6 +2817,10 @@ function showView({ set = null, pkg = null, view = null, filter = null, cause = 
   becauseFilter = null;
   buildFailedFilter = null;
   platformFilter = null;
+  inFilter = null;
+  byFilter = null;
+  statusFilter = null;
+  matchTeam = null;
   document.getElementById('search').value = '';
   update();
   // From the page's top, as a new page would: scrolling the view's header
@@ -2748,15 +2883,89 @@ function moreMatchesHtml() {
     loadNames();
     return html`<div class="more-matches"><div class="other-label">Searching all of nixpkgs…</div></div>`;
   }
-  const { found, total } = nameMatches(names, query, new Set(packages.map((p) => p.name)));
+  // Another search, or other filters: from the first ones again.
+  const asked = [query.trim(), inFilter, statusFilter, byFilter, matchTeam, platformFilter].join(
+    '\n',
+  );
+  if (asked !== matchQuery) {
+    matchQuery = asked;
+    matchLimit = MATCHES_SHOWN;
+  }
+  const { found: all, total } = nameMatches(
+    names,
+    query,
+    new Set(packages.map((p) => p.name)),
+    Infinity,
+  );
   if (!total) return '';
+  const narrowed = inFilter || statusFilter || byFilter || matchTeam || platformFilter;
+  if (total > 1 || narrowed) loadFacets();
+  const { kept, sets, statuses, by, teams, platforms } = matchFacets(
+    all,
+    {
+      set: inFilter,
+      status: statusFilter,
+      by: byFilter,
+      team: matchTeam,
+      platform: platformFilter,
+    },
+    facetIndex ? facetsOf : null,
+  );
+  const shownHere = kept.slice(0, matchLimit);
+  const setLabel = (v) => (v === TOP_LEVEL ? 'top level' : v);
+  const setChoices =
+    inFilter && !sets.some(([v]) => v === inFilter) ? [...sets, [inFilter, 0]] : sets;
+  const statusChoices =
+    statusFilter && !statuses.some(([v]) => v === statusFilter)
+      ? [...statuses, [statusFilter, 0]]
+      : statuses;
   return html`<div class="more-matches">
-    <div class="other-label">${total.toLocaleString()} ${shownView === 'overview' ? '' : 'more '}${total === 1 ? 'package matches' : 'packages match'} in all of nixpkgs${total > found.length ? html`, the first ${found.length}` : ''}</div>
-    <ul>${found.map(
+    <div class="other-label">${total.toLocaleString()} ${shownView === 'overview' ? '' : 'more '}${total === 1 ? 'package matches' : 'packages match'} in all of nixpkgs${narrowed ? html`, ${kept.length.toLocaleString()} with these filters` : ''}</div>
+    ${
+      // Shown whenever one is picked, even for one match: else a filter
+      // from an earlier search would hide it, with no way to undo it.
+      total > 1 || narrowed
+        ? html`<div class="refine match-filters" role="group" aria-label="Narrow the matches"><label class="refine-age" title="Only one package set, by the attribute's first part (python313Packages, vimPlugins), or the top-level packages: the list above too. Each with how many match.">In <select data-in><option value="">any set</option>${setChoices.map(
+            ([v, n]) => facetOption(v, setLabel(v), n, inFilter),
+          )}</select></label><label class="refine-age" title="Only the matches with this status, as their dot says. Each with how many match.">Status <select data-status><option value="">any status</option>${statusChoices.map(
+            ([v, n]) => facetOption(v, NAME_STATUSES[v], n, statusFilter),
+          )}</select></label>${facetIndex ? matchFacetsHtml(by, teams, platforms) : ''}${
+            narrowed
+              ? html`<button type="button" class="refine-btn" data-clear-matches title="Back to every match: any set, status, maintainer, team and platform">Clear filters</button>`
+              : ''
+          }</div>`
+        : ''
+    }
+    <ul>${shownHere.map(
       ([name, letter, set]) =>
         html`<li><span class="status-dot ${NAME_DOTS[letter[0]] || 'neutral'}" role="img" aria-label="${DOT_TITLE[NAME_DOTS[letter[0]] || 'neutral'] || ''}"></span><a class="files-link mono" href="${scopeHref({ pkg: name })}" data-scope-pkg="${name}">${name}</a>${set ? html` ${bulkBadge(set)}` : ''}${letter.endsWith('v') ? html` <span class="badge vuln">vulnerable</span>` : ''}</li>`,
     )}</ul>
+    ${
+      kept.length > shownHere.length
+        ? html`<button type="button" class="more-btn more-matches-btn" data-more-matches>Show ${Math.min(MATCHES_MORE, kept.length - shownHere.length).toLocaleString()} more (${shownHere.length.toLocaleString()} of ${kept.length.toLocaleString()} shown)</button>`
+        : ''
+    }
   </div>`;
+}
+
+// The matches' filters from facets.json: by a maintainer (the BY_SHOWN with
+// the most matches offered), a team, a platform; each with its count.
+function matchFacetsHtml(by, teams, platforms) {
+  const teamChoices =
+    matchTeam && !teams.some(([t]) => t === matchTeam) ? [...teams, [matchTeam, 0]] : teams;
+  return html`<label class="refine-age" title="Only the matches this maintainer is listed for (meta.maintainers): type a GitHub handle; those with the most matches are offered, each with how many. The list above too.">By <input type="search" class="by-pick" data-by list="matchByOptions" placeholder="any maintainer" value="${byFilter || ''}" autocomplete="off" spellcheck="false"><datalist id="matchByOptions">${by
+    .slice(0, BY_SHOWN)
+    .map(([h, n]) => html`<option value="${h}">${fmt(n)}</option>`)}</datalist></label>${
+    teamChoices.length
+      ? html`<label class="refine-age" title="Only the matches of this nixpkgs team (meta.teams). Each with how many match.">Team <select data-match-team><option value="">any team</option>${teamChoices.map(
+          ([t, n]) => facetOption(t, t, n, matchTeam),
+        )}</select></label>`
+      : ''
+  }<label class="refine-age" title="Only the matches available there (meta.platforms). Darwin is macOS. Each with how many match. The list above too.">On <select data-platform-pick><option value="">any platform</option>${Object.entries(
+    PLATFORMS,
+  ).map(([key, p]) =>
+    facetOption(key, p.label, platforms[key] ?? 0, platformFilter),
+  )}</select></label>`;
 }
 
 // One panel under the row, showing the package details (clicking the row),
@@ -4246,19 +4455,20 @@ function hideButton(pkg) {
 // How many repositories a panel shows before "Show all".
 const COMPARED_SHOWN = 8;
 
+// What every filter but the facets (set, maintainer, platform) keeps.
+const passesOthers = (p, q) =>
+  inList(p) &&
+  inPeople(p) &&
+  inSet(p) &&
+  notHidden(p) &&
+  refined(p) &&
+  FILTERS[activeFilter].test(p) &&
+  matchesSearch(p, q);
+
 function currentFiltered() {
   const q = document.getElementById('search').value;
-  const list = packages.filter(
-    (p) =>
-      inPlatform(p) &&
-      inList(p) &&
-      inPeople(p) &&
-      inSet(p) &&
-      notHidden(p) &&
-      refined(p) &&
-      FILTERS[activeFilter].test(p) &&
-      matchesSearch(p, q),
-  );
+  facetBase = packages.filter((p) => passesOthers(p, q));
+  const list = facetBase.filter((p) => inPlatform(p) && inNameSet(p) && byMaintainer(p));
   if (sortAZ) return list;
   // The vulnerable ones: worst severity first (in the order they had).
   if (activeFilter === 'vuln') {
@@ -4316,6 +4526,21 @@ document.addEventListener('click', (e) => {
   else return;
   update();
 });
+// The search's matches in all of nixpkgs: the next ones, or every one again
+// (moreMatchesHtml).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button[data-more-matches]')) {
+    matchLimit += MATCHES_MORE;
+    update({ keepPage: true });
+  } else if (e.target.closest('button[data-clear-matches]')) {
+    inFilter = null;
+    statusFilter = null;
+    byFilter = null;
+    matchTeam = null;
+    platformFilter = null;
+    update();
+  }
+});
 // Narrowing the list (refineHtml), wherever it's drawn.
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-refine]');
@@ -4331,7 +4556,13 @@ document.addEventListener('change', (e) => {
   else if (e.target.matches('select[data-build-failed]'))
     buildFailedFilter = e.target.value || null;
   else if (e.target.matches('select[data-platform-pick]')) platformFilter = e.target.value || null;
-  else if (e.target.matches('select[data-per]')) {
+  else if (e.target.matches('select[data-in]')) inFilter = e.target.value || null;
+  else if (e.target.matches('select[data-status]')) statusFilter = e.target.value || null;
+  else if (e.target.matches('select[data-match-team]')) matchTeam = e.target.value || null;
+  else if (e.target.matches('input[data-by]')) {
+    const by = e.target.value.trim().replace(/^@/, '').toLowerCase();
+    byFilter = /^[\w.-]{1,60}$/.test(by) ? by : null;
+  } else if (e.target.matches('select[data-per]')) {
     // The page holding the first row shown before, at the new size.
     const first = (pageNum - 1) * pageSize;
     pageSize = Number(e.target.value);

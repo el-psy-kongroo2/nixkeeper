@@ -21,7 +21,9 @@ import {
   dayPosition,
   daysText,
   daysUntil,
+  decodeFacets,
   escapeHtml,
+  facetCounts,
   failedBecause,
   familyLabel,
   faviconKey,
@@ -37,8 +39,10 @@ import {
   maintainersParam,
   maintainsDirectly,
   matchesSearch,
+  matchFacets,
   midway,
   nameMatches,
+  nameSet,
   nixkeeperEntry,
   olderThan,
   olderVersionKept,
@@ -1241,5 +1245,117 @@ describe('familyLabel', () => {
       'python313Packages.huaweicloudsdk*',
     );
     assert.equal(familyLabel(['abc', 'xyz']), null);
+  });
+});
+
+describe('nameSet', () => {
+  test("the attribute's first part, or top-level", () => {
+    assert.equal(nameSet('python313Packages.requests'), 'python313Packages');
+    assert.equal(nameSet('vimPlugins.nvim-treesitter-parsers.lua'), 'vimPlugins');
+    assert.equal(nameSet('ripgrep'), 'top-level');
+  });
+});
+
+describe('facetCounts', () => {
+  test('the most first, ties by name; several values each counted', () => {
+    const list = [
+      { maintainers: ['b', 'a'] },
+      { maintainers: ['a'] },
+      { maintainers: [] },
+      { maintainers: ['C'] },
+    ];
+    assert.deepEqual(
+      facetCounts(list, (p) => p.maintainers),
+      [
+        ['a', 2],
+        ['b', 1],
+        ['C', 1],
+      ],
+    );
+    assert.deepEqual(
+      facetCounts([{ n: 'x' }, { n: null }], (p) => p.n),
+      [['x', 1]],
+    );
+  });
+});
+
+describe('matchFacets', () => {
+  const matches = [
+    ['ripgrep', 'u'],
+    ['ripgrep-all', 'o'],
+    ['emacsPackages.ripgrep', 'fv'],
+    ['vimPlugins.blink-ripgrep-nvim', 'u'],
+  ];
+  test('counts each facet with the other picked', () => {
+    const all = matchFacets(matches);
+    assert.equal(all.kept.length, 4);
+    assert.deepEqual(all.sets, [
+      ['top-level', 2],
+      ['emacsPackages', 1],
+      ['vimPlugins', 1],
+    ]);
+    assert.deepEqual(all.statuses, [
+      ['failing', 1],
+      ['outdated', 1],
+      ['uptodate', 2],
+      ['vulnerable', 1],
+    ]);
+    const upToDate = matchFacets(matches, { status: 'uptodate' });
+    assert.deepEqual(
+      upToDate.kept.map(([n]) => n),
+      ['ripgrep', 'vimPlugins.blink-ripgrep-nvim'],
+    );
+    assert.deepEqual(upToDate.sets, [
+      ['top-level', 1],
+      ['vimPlugins', 1],
+    ]);
+    const top = matchFacets(matches, { set: 'top-level', status: 'vulnerable' });
+    assert.equal(top.kept.length, 0);
+    assert.deepEqual(top.statuses, [
+      ['outdated', 1],
+      ['uptodate', 1],
+    ]);
+  });
+});
+
+describe('decodeFacets and matchFacets with facets', () => {
+  const names = [
+    ['ripgrep', 'u'],
+    ['ripgrep-all', 'o'],
+    ['emacsPackages.ripgrep', 'fv'],
+  ];
+  const facets = decodeFacets({
+    handles: ['Iedame', 'someone'],
+    teams: ['Gaming'],
+    rows: [[7, [0], [0]], 1, [4, [1]]],
+  });
+  test('decoded beside names, handles lowercase', () => {
+    assert.deepEqual(facets[0], { bits: 7, handles: ['iedame'], teams: ['Gaming'] });
+    assert.deepEqual(facets[1], { bits: 1, handles: [], teams: [] });
+  });
+  const of = (e) => facets[names.indexOf(e)];
+  test('by, team and platform, each counted with the others', () => {
+    const all = matchFacets(names, {}, of);
+    assert.deepEqual(all.by, [
+      ['iedame', 1],
+      ['someone', 1],
+    ]);
+    assert.deepEqual(all.teams, [['Gaming', 1]]);
+    assert.deepEqual(all.platforms, { linux: 2, 'x86_64-linux': 2, 'aarch64-linux': 1, darwin: 2 });
+    const darwin = matchFacets(names, { platform: 'darwin' }, of);
+    assert.deepEqual(
+      darwin.kept.map(([n]) => n),
+      ['ripgrep', 'emacsPackages.ripgrep'],
+    );
+    assert.deepEqual(darwin.platforms.darwin, 2); // its own left out
+    const mine = matchFacets(names, { by: 'iedame', platform: 'darwin' }, of);
+    assert.deepEqual(
+      mine.kept.map(([n]) => n),
+      ['ripgrep'],
+    );
+    assert.deepEqual(mine.sets, [['top-level', 1]]);
+  });
+  test('while facets.json loads, its filters keep everything', () => {
+    assert.equal(matchFacets(names, { by: 'iedame' }).kept.length, 3);
   });
 });

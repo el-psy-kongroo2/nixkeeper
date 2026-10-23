@@ -9,6 +9,37 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ## [Unreleased]
 
+### Added
+
+- Facets in the list's filters: **in** a package set (`?in=python313Packages`,
+  `?in=top-level`) and **by** a maintainer within the list shown
+  (`?by=fabaff`, typed or picked from the 300 with the most there), and
+  each platform of **on** with its count. Every choice says how many it
+  would show with the other filters on.
+- Search across all of nixpkgs: its matches beyond the list narrow by
+  **in** a package set and **status** (failing, outdated, waiting for the
+  channel, up to date, can't be compared, vulnerable: `?status=outdated`),
+  each with its count, and show 200 more at a time instead of stopping at
+  50. **Clear filters** when they leave none. And by **maintainer**,
+  **team** (`?ofteam=`) and **platform**, from a new `facets.json` (every
+  package's maintainers, teams and platforms beside `names.json`, about
+  120 KB compressed), loaded on the first search.
+
+### Changed
+
+- The line by the logo and the tab's title: "health of every nixpkgs
+  package", as nixkeeper.com covers all of nixpkgs now; and the
+  description (page, flake, package), in nixpkgs' style (no article, no
+  final period): "Health dashboard for every nixpkgs package: new
+  releases, build and update failures, vulnerabilities and open PRs, by
+  maintainer and team". An instance of its own lists says "health of your
+  nixpkgs packages" (set once its data loads; link previews show
+  index.html's).
+- Screenshots retaken with the new lines. Link previews of nixkeeper.com
+  and the release notes' card show the overview's social preview
+  ("Health dashboard for every nixpkgs package"); the list's says
+  "Health dashboard for your nixpkgs packages".
+
 ## [0.21.0] - 2026-10-21
 
 Fewer packages wrongly shown as outdated, over 400 of them: snapshots
