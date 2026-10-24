@@ -148,10 +148,12 @@ Around that:
   own, and the limits community rules are held to (with `sources/http.py`'s
   safe mode)
 - `lock.py`: one run at a time on a data folder (`<data dir>.lock`), for
-  every command that writes or copies the data
+  every command that writes or copies the data. Holding it is also when a
+  swap a run didn't finish is tidied up (`datastore.restore_interrupted_swap`):
+  reading the data (`datastore.load`) never changes the folder
 - `naming.py`: how the data's files are named (`slug` for a team's or list's
-  view, `shard_of` for a row's shard), shared by `datastore.py`, which
-  writes them, and `shape.py`, which checks them
+  view, `shard_of` and `SHARD_FILE` for a row's shard), shared by
+  `datastore.py`, which writes them, and `shape.py`, which checks them
 - `timing.py`: how long each phase of a sync took (`Phases`: a `lap` after
   each step of `sync.py`), in its log at the end, the longest first
 - `shape.py`: what `data/` must look like, checked before each write (the
