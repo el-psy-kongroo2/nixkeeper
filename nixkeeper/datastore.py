@@ -20,7 +20,8 @@ import math
 import os
 import re
 import shutil
-import zlib
+import sys
+import traceback
 from datetime import UTC, datetime, timedelta
 
 from . import causes, config, shape
@@ -34,6 +35,7 @@ from .changes import (
     on_branch,
     waiting_for_channel,
 )
+from .naming import shard_of, slug
 from .sources import vulnerabilities_digest
 from .sources.nixpkgs import available_on
 
@@ -77,12 +79,6 @@ def shard_count(rows):
     """How many shards for rows: about SHARD_ROWS a shard, rounded up to a
     power of two (1 for a few hundred, 256 for all of nixpkgs)."""
     return 1 << max(0, math.ceil(math.log2(max(1, rows / SHARD_ROWS))))
-
-
-def shard_of(name, count):
-    """The shard a row is in: a stable hash of its name, so adding a package
-    changes only its own shard."""
-    return zlib.crc32(name.encode()) % count
 
 
 def elided(row, run):
@@ -556,12 +552,6 @@ def status(row):
     return letter + ("v" if is_vulnerable(row) else "")
 
 
-def slug(name):
-    """A team's or list's name as a file name: "Security review" ->
-    "security-review" (viewSlug in page/logic.js)."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-
-
 # The systems unbuilt_where looks at: each Linux system apart, Darwin as one.
 UNBUILT_KEYS = ("x86_64-linux", "aarch64-linux", "darwin")
 
@@ -970,6 +960,29 @@ def _write_file(path, text):
     os.replace(path + ".tmp", path)
 
 
+def _check_shape(written):
+    """Report what in the data doesn't match its description (shape.py).
+
+    The check only reports for now, so it must never stop a write: should
+    the check itself fail, that failure is logged too, and the write goes on.
+
+    Args:
+        written: The data about to be written, as files builds it.
+    """
+    try:
+        shape.report(shape.problems(written))
+    except Exception as e:  # reporting only: never stop a write
+        # Where in shape.py it broke, to find the bug without running it
+        # again: the innermost frame may be in a library it called.
+        frames = traceback.extract_tb(e.__traceback__)
+        frame = next(
+            (f for f in reversed(frames) if os.path.basename(f.filename) == "shape.py"),
+            frames[-1],
+        )
+        where = f"{os.path.basename(frame.filename)}:{frame.lineno}"
+        print(f"Data shape: the check itself failed at {where}: {e!r}", file=sys.stderr)
+
+
 def write(
     index, entries, out_dir=None, history=None, fixed=None, events=None, kept=None
 ):
@@ -985,7 +998,7 @@ def write(
     shutil.rmtree(tmp_dir, ignore_errors=True)  # leftover from a failed run
     os.makedirs(tmp_dir)
     written = files(index, entries, history, fixed, events)
-    shape.report(shape.problems(written, slug))
+    _check_shape(written)
     for name, data in written.items():
         _write_file(os.path.join(tmp_dir, name), dumps(data))
     for name, data in (kept or {}).items():
@@ -1002,7 +1015,7 @@ def update(index, entries, out_dir=None):
     change a few rows."""
     out_dir = out_dir or config.OUT_DIR  # the setting now, not at import
     written = files(index, entries)
-    shape.report(shape.problems(written, slug))
+    _check_shape(written)
     for name, data in written.items():
         path = os.path.join(out_dir, name)
         text = dumps(data)
