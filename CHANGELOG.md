@@ -11,6 +11,80 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Added
 
+- **The update a build has failed since**: a failure at another version
+  than it last built at says so in the builds panel, "at 1.2.4, since its
+  update (#575734) · last built at 1.1.0", with the PR when nixkeeper-prs'
+  merged PRs have it (else a search for it), and "likely broke the build"
+  on it under On GitHub. 448 packages fail at a version they never built
+  at (2026-10-23).
+- **Patched by**: the open PRs patching a CVE still affecting a package
+  (their diff adds its id, mostly a patch named after it), on its line in
+  the Vulnerabilities details: "patched by #578062, #578074 (into
+  release-26.05)" on libsidplayfp. From nixkeeper-prs' `diffFacts.cves`; 6
+  packages on 2026-10-23.
+- **Init PRs for a package nixpkgs has now** (added another way while they
+  waited: 68 on 2026-10-23, `macshot: init at 4.0.4` with nixpkgs at
+  4.1.2) in "Can be closed", **PR to close**, the list of them all and
+  "nixpkgs in numbers", beside the update PRs nixpkgs is past; from
+  nixkeeper-prs' `alreadyIn`.
+- **Fixed in**: a CVE's version that fixes it, from its version ranges
+  ("affected <3.20.1": fixed in 3.20.1), in the Vulnerabilities details;
+  and under them, whether master, the open update PR or the newest release
+  fixes them ("#564426 updates it to 3.20.1, which fixes it", "fixes 3 of
+  6: all fixed in 1.21.1"), instead of "check whether that fixes it". 470 of
+  the 1,063 CVEs affecting a package get one (123 packages, 2026-10-23); a
+  fix only in a newer series than nixpkgs' says to check for a backport,
+  and an older series kept beside a newer one (firefox-esr) gets none.
+
+### Fixed
+
+- PRs titled with tags before the package ("[26.05] libsidplayfp: ...",
+  "[Backport release-26.05] ...", "[WIP] ...": 232 open) count for it, in
+  **Open on GitHub** and for staging: 139 packages counted too few.
+- An update PR to the version a build fails at isn't its "likely fix": it's
+  in the failing build (tgrep's #575734 was).
+
+## [0.22.0] - 2026-10-23
+
+A page that's quieter and stays put, from a round of feedback: each
+failing build and update marked by a **hard hat** or a **robot** with
+only why ("compile error", "patch"), GitHub's icons and only the counts
+above 0, the list's columns and rows the same on every list, and grey
+shapes while it loads. Finding things: **sort** the list, narrow it **in**
+a package set or **by** a maintainer, search all of nixpkgs with filters,
+**several packages open** at once. New lists: update PRs nixpkgs is past
+(**can be closed**), build failures **no newer version** would fix. And
+fewer wrong counts: PRs and issues counted when they're about the package
+("pkg" from 120 PRs to 2), firefox-esr and thunderbird-153 judged by their
+own ESR series.
+
+### Added
+
+- **Newer version: known / none known** (`?newer=yes`, `?newer=no`), with
+  any tile: build failures an update won't fix (`?filter=builds&newer=no`,
+  852 rows on 2026-10-23), or that one might and nobody has opened
+  (`?newer=yes&refine=nopr`).
+- **Show errors** with Build failures or Failed (`?errors=1`): every failing
+  package's builds open under its row, with its log's lines, loaded as they
+  scroll into view.
+- **Can be closed**, on a maintainer's and a team's page: their open update
+  PRs nixpkgs is already past (it has the PR's version or a newer one), each
+  with what nixpkgs has now, Hide, and a link to all of them. Also a
+  **PR to close** filter (`?refine=superseded`), a view of every package
+  with one (**Update PRs to close**, `?view=superseded`), the PR in a
+  package's details, and its count in "nixpkgs in numbers" (253 PRs on
+  2026-10-23, 203 of them the update bot's). Rows have `supersededPRs`;
+  `index.json` has `close`.
+- Sorting the list: **Sort** (most pressing, longest-standing, newest,
+  biggest version gap, name A–Z: `?sort=`) and ↓/↑ reversing it
+  (`?order=reverse`), under the tiles. The A–Z button in the header goes:
+  name A–Z is one of the orders (`?sort=az` links still work).
+- **Open PR: with one / without** (`?refine=nopr` for packages no PR
+  touches), instead of the one-sided "With an open PR" chip.
+- Typing with a row of the list focused goes into the search, which filters
+  as you type. `python3Packages.` finds `python313Packages.…` (as nixpkgs
+  titles write it), in the list and in all of nixpkgs, and
+  `?in=python3Packages` is every `python3…Packages` set.
 - Facets in the list's filters: **in** a package set (`?in=python313Packages`,
   `?in=top-level`) and **by** a maintainer within the list shown
   (`?by=fabaff`, typed or picked from the 300 with the most there), and
@@ -27,6 +101,78 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Changed
 
+- Several packages open at once: opening one no longer closes the others;
+  **Close all** beside the list's count, or Esc, closes them. A package's
+  name is a link to it alone (`?pkg=`), for a tab of its own.
+- The builds panel brings failures alike together (same reason and log
+  lines: python313Packages and python314Packages, on two platforms), their
+  log's lines shown once: "the same on all 4".
+- A package's details: "On GitHub" labels a few words long ("likely fix",
+  "merge-bot ready", "builds now · can close"), the sentence on hover; a
+  merged PR's people on its link's hover; no "a draft" (its icon says it).
+  The update PR of a vulnerable package is under its vulnerabilities, which
+  say what their CVEs share once, group them by the tracker's issue, a line
+  each (the worst five, then Show all: zitadel's 24 took 48 lines), and
+  short verdicts ("affected", the sentence on hover).
+- **Open on GitHub**: GitHub's icons and the counts above 0 ("PRs 2" is
+  the PR icon and 2), and "—" when there are none (two thirds of the
+  attention list showed "PRs 0 issues 0": two links to an empty search).
+  In a package's details, each PR and issue has GitHub's icon too: open,
+  draft, merged (in violet), issue.
+- Headings in the details, the popovers and the Theme menu ("Maintainers",
+  "Outdated since") the size of what they head, in sentence case, instead
+  of small capitals a size and a half smaller.
+- A package with no maintainer says "none in nixpkgs · see all packages
+  without one" instead of "(@none)", which read like a GitHub mention.
+- The robot of a "—" the bot is queued for anyway is inside its button
+  too, as in every other update cell (the separate robot button is gone).
+- The build and update columns: a **hard hat** (Hydra's builders) and a
+  **robot** (nixpkgs-update) in place of the dot, then only why ("compile
+  error", "patch"; "failure" when the logs don't say), without "failed:"
+  on every line (screen readers still hear it). Red for a failure, gold
+  for blocked, marked broken or can't update; the update cell's robot in
+  the queue's colour (green, amber) when the bot will try it, instead of a
+  second robot beside the text.
+- The list no longer moves between lists: its
+  columns have fixed widths (they were sized to each list's content, and
+  Build failures scrolled sideways at 1,280px), the filters' selects too
+  (their counts changed their width), and every collapsed row is 78px
+  (room for a name or versions on two lines); a long version's badges go
+  on a line under it rather than squeezing it into one line per few
+  characters. Names with no dot near the column's edge break anywhere.
+- Loading: grey shapes where the overview or the list will be (a
+  skeleton), the same size as what replaces them, instead of "Loading
+  package data…" (screen readers still hear that). Layout shift while
+  loading: 0.0006, from 0.013.
+- "Where the data is from": its two links on lines of their own.
+- The builds panel says each platform once: one badge with why it failed
+  ("missing file"; "failed: missing file" for screen readers), "last built
+  1 y ago" (the date on hover), its Build and Job at the line's end, and
+  "full log ↗" under the log's lines instead of a Log button. No dot, no
+  "Failing on 2 of 2" or jobset above the lines, no note that
+  x86_64-darwin isn't built any more.
+- The update panel leaves out the sentence when its outcome already says
+  it ("Failed: build", "Failed: updateScript").
+- A package's panel says each thing once: the badge naming where its
+  newest version is from links there (the release, the archive, the PR
+  merged on master, Repology's project), and the text below only adds what
+  it doesn't say. No **Why?** button (that text is always shown), no
+  "nixpkgs unstable" line, no Repology button; its repositories only while
+  it isn't up to date. Maintainers have their GitHub avatar (loaded only
+  while a panel is open, no referrer).
+- Links and actions look different: links are text ending in ↗ (Homepage,
+  package.nix, Build, Job, "full log"); **Hide** is a small outlined
+  button, like the maintainer page's PRs' Hide.
+- "Where the data is from" on nixkeeper.com is three lines (the last sync,
+  the nixpkgs commit, a link to status.nixkeeper.com, where each digest's
+  row now says what the sync read from it); instances of their own keep
+  the full list. Why staging-next wasn't used is on the **breaks on
+  staging-next** chip's hover.
+- "Not fixed on master yet" is **Not merged yet**: it also leaves out
+  updates merged into staging, staging-next or a branch like
+  haskell-updates (`?refine=notonmaster` unchanged).
+- A filter chip that's on ends in ✕, as the list's chip does, instead of
+  starting with ✓.
 - The line by the logo and the tab's title: "health of every nixpkgs
   package", as nixkeeper.com covers all of nixpkgs now; and the
   description (page, flake, package), in nixpkgs' style (no article, no
@@ -35,10 +181,44 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   maintainer and team". An instance of its own lists says "health of your
   nixpkgs packages" (set once its data loads; link previews show
   index.html's).
-- Screenshots retaken with the new lines. Link previews of nixkeeper.com
+- Screenshots retaken (again on 2026-10-23, with the page as this release
+  has it), the phone ones without the white strip down their right edge
+  (the page's scrollbar in their frame, which `--hide-scrollbars` didn't
+  hide). Link previews of nixkeeper.com
   and the release notes' card show the overview's social preview
   ("Health dashboard for every nixpkgs package"); the list's says
   "Health dashboard for your nixpkgs packages".
+- **Open on GitHub** counts the PRs about the package (titled with its name
+  or an attribute, by nixpkgs' convention) and the issues with its name
+  whole in their title, not every title with its name's words: "pkg" was
+  120 PRs and 96 issues (pkgs/..., pkg-config), now 2 and 8; 1,409 of the
+  13,523 packages needing attention count fewer, 51 a little more
+  (2026-10-23). The link searches for the name in quotes, and says when
+  GitHub's search shows more. Rows have `searchShowsMore`.
+
+### Fixed
+
+- thunderbird-153 (153.4.0) wasn't outdated in its own series though
+  153.5.1 was out: nixpkgs' own thunderbird-esr-bin at 153.5.0 made its
+  series 153.4. The next series is now one whose first number differs,
+  when nixpkgs has one. And a kept series behind in its own (39, glibmm_2_4
+  to go) says so in its details, without the newer series' repositories
+  (glibmm 2.90.0 beside glibmm_2_4's newest, 2.66.10).
+- firefox-esr read as outdated against Firefox's 158.0.1 and "on master":
+  master's `153.5.1esr` was compared with the channel's `153.5.1`, which
+  Repology writes without the suffix. A version that only adds a suffix
+  Repology drops (not a pre-release's) is the same release, in the sync
+  and on the page. And for an older version kept beside a newer one,
+  Repology's vulnerable flag no longer counts (firefox-esr, thunderbird-153
+  and libxml2_13 flagged by it alone, nothing open in the tracker or OSV),
+  nor do its details list the newer series' repositories and betas.
+- A package only nixpkgs packages, whose version nothing compared, is grey
+  ("only in nixpkgs"), not green: Repology's "unique" with no other
+  repository and no update check of nixkeeper's (17,988 packages on
+  2026-10-23). The rows say `onlyNixpkgs`; its status letter is `n`.
+  Those GitHub's releases confirm stay green: the GitHub releases digest's
+  result is now used for them even when it only confirms the version
+  (3,488, python313Packages.pbar2).
 
 ## [0.21.0] - 2026-10-21
 
@@ -2169,7 +2349,8 @@ to its restructuring into a Python package.
   packages removed from the lists don't leave files behind.
 - The sync script is a Python package (`nixkeeper/`) with tests in `tests/`.
 
-[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.21.0...HEAD
+[unreleased]: https://github.com/nixkeeper/nixkeeper/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nixkeeper/nixkeeper/compare/v0.18.0...v0.19.0

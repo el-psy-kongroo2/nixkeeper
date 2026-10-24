@@ -29,6 +29,8 @@ from ..versions import is_newer, version_key
 from . import about, github, http
 
 FORMAT = 1
+# The update bot (nixpkgs-update), as GitHub names it.
+BOT = "r-ryantm"
 PR_URL = "https://github.com/NixOS/nixpkgs/pull/"
 ISSUE_URL = "https://github.com/NixOS/nixpkgs/issues/"
 # At most so many PRs and issues of a package in its panel (the rest are a
@@ -206,6 +208,48 @@ CVE = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
 NOT_AFFECTED = ("fixed", "patched")
 
 
+def add_cve_prs(rows, prs):
+    """Open PRs patching a package's CVE: their diff adds its id (a patch
+    named after it, mostly: the digest's diffFacts "cves", 17 PRs on
+    2026-10-23), on each of its vulnerabilities still affecting it, as
+    "prs" ([{"number", "title", "base"?: not master, "draft"?}], at most
+    SHOWN): "is someone fixing this?" in its panel. A PR touching other
+    packages only doesn't count; one the digest maps to none does (a patch
+    in a shared file: binutils, gimp). After the vulnerabilities are in."""
+    by_cve = {}
+    for pr in prs or []:
+        for cve in (pr.get("diffFacts") or {}).get("cves") or []:
+            by_cve.setdefault(cve.upper(), []).append(pr)
+    if not by_cve:
+        return
+    for row in rows:
+        keys = {package_key(n) for n in [row["name"], *(row.get("attrs") or [])]}
+        for v in row.get("vulnerabilities") or []:
+            found = [
+                pr
+                for pr in by_cve.get(v["id"].upper(), [])
+                if v["verdict"] not in NOT_AFFECTED
+                and (
+                    not pr.get("packages")
+                    or keys & {package_key(n) for n in pr["packages"]}
+                )
+            ]
+            if found:
+                v["prs"] = [
+                    {
+                        "number": pr["n"],
+                        "title": pr["title"],
+                        **(
+                            {"base": pr["base"]}
+                            if pr.get("base") not in (None, "master")
+                            else {}
+                        ),
+                        **({"draft": True} if pr.get("draft") else {}),
+                    }
+                    for pr in sorted(found, key=lambda pr: pr["n"])[:SHOWN]
+                ]
+
+
 def add_cve_issues(rows, issues):
     """An open issue naming CVEs (in its title) that nixkeeper finds don't
     affect a package's nixpkgs version, every one of them (its
@@ -303,6 +347,58 @@ def mergeable(prs, rows):
                 item["vulnerable"] = True
         found.append(item)
     found.sort(key=lambda p: (p["created"], p["number"]))
+    return found
+
+
+def mark_superseded(prs, rows):
+    """Mark each row's open update PRs nixpkgs is already past: the digest's
+    state "superseded" (nixpkgs has the PR's version, or a newer one: 255 on
+    2026-10-23, most of them r-ryantm's), as "supersededPRs" ([{"number",
+    "title", "author", "created", "now": nixpkgs' version, "draft"?}],
+    oldest first), for a maintainer's and a team's "Can be closed" and the
+    list's filter. And init PRs for an attribute nixpkgs has now (added
+    another way while they waited: the digest's "alreadyIn", 68 on
+    2026-10-23), with "init": true. Returns {"prs", "bot": r-ryantm's of
+    them, "init"} for the overview, or None without the digest's list."""
+    if prs is None:
+        return None
+    by_key = {package_key(r["name"]): r for r in rows}
+    for row in rows:
+        row.pop("supersededPRs", None)
+        for attr in row.get("attrs") or []:
+            by_key.setdefault(package_key(attr), row)
+    found = {"prs": 0, "bot": 0, "init": 0}
+    for pr in prs:
+        update = pr.get("update") or {}
+        added = pr.get("alreadyIn") or {}
+        if pr.get("state") == "superseded":
+            attr, now = update.get("attr"), update.get("now")
+        elif added.get("attr"):
+            attr, now = added["attr"], added.get("version")
+        else:
+            continue
+        row = by_key.get(package_key(attr or ""))
+        if row is None:
+            continue
+        item = {
+            "number": pr["n"],
+            "title": pr["title"],
+            "author": pr.get("author") or "",
+            "created": pr.get("created") or "",
+            "now": now or row.get("nixVersion") or "",
+        }
+        if pr.get("draft"):
+            item["draft"] = True
+        row.setdefault("supersededPRs", []).append(item)
+        if pr.get("state") == "superseded":
+            found["prs"] += 1
+            found["bot"] += item["author"] == BOT
+        else:
+            item["init"] = True
+            found["init"] += 1
+    for row in rows:
+        if row.get("supersededPRs"):
+            row["supersededPRs"].sort(key=lambda p: (p["created"], p["number"]))
     return found
 
 
@@ -584,6 +680,14 @@ def add_staging_prs(rows, staging):
 FIX_MAX_TOUCHED = 3
 # Marking a package broken stops Hydra building it: not a fix to credit.
 MARKS_BROKEN = re.compile(r"\bmark\w*\b.*\bbroken\b", re.IGNORECASE)
+# An update's title: "tgrep: 1.1.0 -> 1.2.4", the version it goes to.
+UPDATE_TO = re.compile(r"^[\w.+-]+:\s*\S+\s*(?:->|→)\s*(\S+)")
+
+
+def in_failed(pr, versions):
+    """Whether PR is an update to one of versions, its failed builds'."""
+    to = UPDATE_TO.match(pr.get("title") or "")
+    return bool(to) and to.group(1).removeprefix("v") in versions
 
 
 def build_fix_prs(rows, merged, previous):
@@ -596,7 +700,10 @@ def build_fix_prs(rows, merged, previous):
     Hydra builds it (history.fixes credits a build fix to it). merged: the
     digest's merged PRs (those since the channel's commit); a row still
     failing keeps the one the last sync found, which a channel move may
-    have taken off that list. previous: the last run's data."""
+    have taken off that list. previous: the last run's data.
+    An update PR to the version a failed build is at is in that build: not
+    its fix but likely what broke it ("buildCausePR", the same fields:
+    tgrep's #575734, 1.1.0 -> 1.2.4, failing at 1.2.4 since)."""
     before = {row["name"]: row for row in previous.get("packages") or []}
     touching = {}
     for pr in merged or []:
@@ -612,26 +719,50 @@ def build_fix_prs(rows, merged, previous):
             keys.add(package_key(named.group(1)))
         for key in keys:
             touching.setdefault(key, []).append(pr)
+
+    def entry(pr):
+        return {
+            "number": pr["number"],
+            "title": pr["title"],
+            "url": pr["url"],
+            **{k: pr[k] for k in ("author", "mergedBy", "merged") if pr.get(k)},
+        }
+
     for row in rows:
         old = row.pop("buildFixPR", None)  # this run's data: worked out below
-        failing = any(b["status"] == "failed" for b in row.get("builds") or [])
-        if not failing:
+        old_cause = row.pop("buildCausePR", None)
+        failed = [b for b in row.get("builds") or [] if b["status"] == "failed"]
+        if not failed:
             continue
+        # The versions its failed builds are at, when they last built at
+        # another: they began failing with that update.
+        broke_at = {
+            b["version"]
+            for b in failed
+            if b.get("version")
+            and b.get("lastSuccessVersion")
+            and b["version"] != b["lastSuccessVersion"]
+        }
         since = row.get("failingSince") or ""
         keys = {package_key(a) for a in [row["name"], *(row.get("attrs") or [])]}
-        found = [
-            pr
-            for key in keys
-            for pr in touching.get(key, [])
-            if (pr.get("merged") or "") >= since
-        ]
+        found, causes = [], []
+        for key in keys:
+            for pr in touching.get(key, []):
+                if in_failed(pr, broke_at):
+                    causes.append(pr)
+                elif (pr.get("merged") or "") >= since:
+                    found.append(pr)
         if found:
-            pr = max(found, key=lambda p: p.get("merged") or "")
-            row["buildFixPR"] = {
-                "number": pr["number"],
-                "title": pr["title"],
-                "url": pr["url"],
-                **{k: pr[k] for k in ("author", "mergedBy", "merged") if pr.get(k)},
-            }
-        elif kept := (before.get(row["name"]) or {}).get("buildFixPR") or old:
+            row["buildFixPR"] = entry(max(found, key=lambda p: p.get("merged") or ""))
+        elif (
+            kept := (before.get(row["name"]) or {}).get("buildFixPR") or old
+        ) and not in_failed(kept, broke_at):
             row["buildFixPR"] = kept
+        if causes:
+            row["buildCausePR"] = entry(
+                max(causes, key=lambda p: p.get("merged") or "")
+            )
+        elif broke_at and (
+            kept := (before.get(row["name"]) or {}).get("buildCausePR") or old_cause
+        ):
+            row["buildCausePR"] = kept

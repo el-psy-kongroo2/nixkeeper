@@ -21,6 +21,7 @@ import {
   fromMaster,
   homeHref,
   html,
+  inPickedSet,
   isVulnerable,
   maintainerMatches,
   maintainersKeep,
@@ -35,6 +36,7 @@ import {
   nameSet,
   neverBuiltOn,
   nixkeeperEntry,
+  nothingCompared,
   olderThan,
   olderVersionKept,
   onBranch,
@@ -44,6 +46,7 @@ import {
   pageLinks,
   parseMaintainers,
   parseTeams,
+  problemSince,
   prPrint,
   attentionRank as rankOn,
   raw,
@@ -66,8 +69,10 @@ import {
   VIEWS,
   VULN_COUNTED,
   versionDiff,
+  versionGap,
   viewPath,
   viewSlug,
+  vulnFixes,
   vulnSources,
   vulnSummary,
   waitingForChannel,
@@ -182,13 +187,21 @@ let ageFilter = null;
 let becauseFilter = null;
 // ?buildFailed=: build failures for one reason (a BUILD_FAILED key).
 let buildFailedFilter = null;
+// ?newer=: whether a newer version is known ("yes": outdated, merged or
+// not; "no": not outdated), with any tile: build failures an update won't
+// fix (?filter=builds&newer=no), say.
+let newerFilter = null;
+// ?errors=1: with Build failures (or Failed), every failing row's build
+// panel open under it, loaded as it scrolls into view (watchErrors).
+let showErrors = false;
+const errorsHere = () => showErrors && (activeFilter === 'builds' || activeFilter === 'failed');
 // ?in=: one package set, by the attribute's first part (logic.js nameSet:
 // python313Packages, vimPlugins, top-level); ?by=: one maintainer's
 // packages within the list shown (a handle, lowercase). Counted, with the
 // platforms, over the list's other filters (facetOptions).
 let inFilter = null;
 let byFilter = null;
-const inNameSet = (pkg) => !inFilter || nameSet(pkg.name) === inFilter;
+const inNameSet = (pkg) => !inFilter || inPickedSet(nameSet(pkg.name), inFilter);
 const byMaintainer = (pkg) =>
   !byFilter || (pkg.maintainers || []).some((m) => m.toLowerCase() === byFilter);
 // ?status=: the search's matches in all of nixpkgs of one status (a
@@ -206,7 +219,17 @@ let matchQuery = '';
 // What every filter but the facets kept, last time the list was worked out
 // (currentFiltered): the facets count over it, with no second pass.
 let facetBase = [];
-let sortAZ = false; // default order puts what needs attention first
+// The list's order (?sort=, SORTS key; the first, most pressing, is the
+// default) and whether it's reversed (?order=reverse).
+const SORTS = {
+  pressing: 'most pressing',
+  oldest: 'longest-standing',
+  newest: 'newest',
+  gap: 'biggest version gap',
+  az: 'name A–Z',
+};
+let sortMode = 'pressing';
+let sortReverse = false;
 // The table shows pageSize rows at a time: drawing stays fast whatever the
 // data's size, and the page keeps working with Ctrl+F and screen readers
 // (no virtual scrolling). ?page= in the address, past the first; ?per= for
@@ -377,10 +400,13 @@ const REFINES = {
     title: "Leave out what nixpkgs marks broken: failures nobody's marked yet",
     test: (p) => !FILTERS.broken.test(p),
   },
+  // Its update merged somewhere, on its way: master (waiting for
+  // nixos-unstable), staging or staging-next, a branch like haskell-updates.
   notonmaster: {
-    label: 'Not fixed on master yet',
-    title: 'Leave out outdated packages whose update is merged, waiting for nixos-unstable',
-    test: (p) => !waitingForChannel(p),
+    label: 'Not merged yet',
+    title:
+      'Leave out outdated packages whose update is already merged: on master (waiting for nixos-unstable), into staging or staging-next, or a branch like haskell-updates',
+    test: (p) => !waitingForChannel(p) && !p.stagingPR && !onBranch(p),
   },
   // A forecast (branches.apply_staging_next_breaks): builds on master,
   // fails its own build on staging-next at the same version.
@@ -391,11 +417,20 @@ const REFINES = {
     test: (p) => Boolean(p.stagingNextBreaks),
   },
   // Something open on GitHub about it: for a broken package, maybe its fix.
+  // Picked in the "Open PR" select (pick: 'pr'), not a chip: one or the
+  // other.
   withpr: {
-    label: 'With an open PR',
+    label: 'with one',
+    pick: 'pr',
     title:
       'Only packages an open PR touches: for one marked broken, maybe its fix (or moot: a person checks)',
     test: (p) => (p.openPRs || 0) > 0,
+  },
+  nopr: {
+    label: 'without',
+    pick: 'pr',
+    title: 'Only packages no open PR touches: nobody is on it yet',
+    test: (p) => !((p.openPRs || 0) > 0),
   },
   // Listed for a platform Hydra doesn't build it on (unbuiltWhere): a
   // dependency missing there, or meta.platforms promising too much. With a
@@ -410,6 +445,13 @@ const REFINES = {
         : unbuiltWhere(p).length > 0,
   },
   // Where a person is needed: nixpkgs-update won't open the PR.
+  // An open update PR nixpkgs is already past (prs_digest.mark_superseded).
+  superseded: {
+    label: 'PR to close',
+    title:
+      'Only packages with an open PR nixpkgs is already past: an update PR to its version or an older one, or an init PR for a package it has now, so the PR can be closed',
+    test: (p) => (p.supersededPRs || []).length > 0,
+  },
   nobot: {
     label: "Bot won't update it",
     title:
@@ -428,6 +470,7 @@ const AGES = {
 // kind: whose age counts (a FILTERS key): the list's, or a count's own.
 const refined = (p, kind = activeFilter) =>
   [...refines].every((key) => REFINES[key].test(p)) &&
+  (!newerFilter || (newerFilter === 'yes') === (computeStatus(p) === 'warn')) &&
   (!becauseFilter || failedBecause(p) === becauseFilter) &&
   (!buildFailedFilter || buildFailedBecause(p, platformFilter).includes(buildFailedFilter)) &&
   olderThan(p, ageFilter, kind, Date.now(), platformFilter);
@@ -495,6 +538,53 @@ function buildFailedPick() {
   )}</select></label>`;
 }
 
+// With Build failures or Failed picked: every failing row's errors at once.
+function errorsPick() {
+  if (activeFilter !== 'builds' && activeFilter !== 'failed') return '';
+  return html`<button type="button" class="refine-btn" data-show-errors aria-pressed="${showErrors}" title="${showErrors ? 'On: click to close them' : 'Open every failing package’s builds under it, with the lines from each log: loaded as they scroll into view'}">Show errors</button>`;
+}
+
+// "Newer version": any, known (?newer=yes), none known (?newer=no).
+function newerPick() {
+  return html`<label class="refine-age" title="Whether a newer version than nixpkgs' is known: with Build failures, none known means an update won't fix it, the build needs fixing">Newer version <select data-newer><option value="">any</option>${[
+    ['yes', 'known'],
+    ['no', 'none known'],
+  ].map(
+    ([key, label]) =>
+      html`<option value="${key}"${newerFilter === key ? raw(' selected') : ''}>${label}</option>`,
+  )}</select></label>`;
+}
+
+// The order: a choice of SORTS, and ↓/↑ reversing it.
+function sortPick() {
+  return html`<label class="refine-age" title="The list's order">Sort <select data-sort>${Object.entries(
+    SORTS,
+  ).map(
+    ([key, label]) =>
+      html`<option value="${key}"${sortMode === key ? raw(' selected') : ''}>${label}</option>`,
+  )}</select></label><button type="button" class="refine-btn sort-dir" data-sort-dir aria-pressed="${sortReverse}" aria-label="Reverse the order" title="${sortReverse ? 'Reversed: click for the usual order' : 'Reverse the order'}">${sortReverse ? '↑' : '↓'}</button>`;
+}
+
+// Why "Breaks on staging-next" finds nothing now, when the sync didn't use
+// staging-next's evaluation (its sources: "of the cycle merged into
+// master..."), or null.
+const stagingNextWhy = () => {
+  const s = sources?.['branch:staging-next'];
+  return s && !s.used && s.why ? s.why : null;
+};
+
+// "Open PR": any, with one (?refine=withpr), without (?refine=nopr).
+function prPick() {
+  const picked = ['withpr', 'nopr'].find((key) => refines.has(key)) || '';
+  return html`<label class="refine-age" title="Whether an open PR touches it: for one marked broken, maybe its fix; without one, nobody is on it yet">Open PR <select data-pr-pick><option value="">any</option>${[
+    'withpr',
+    'nopr',
+  ].map(
+    (key) =>
+      html`<option value="${key}"${picked === key ? raw(' selected') : ''}>${REFINES[key].label}</option>`,
+  )}</select></label>`;
+}
+
 // The facets' choices with how many each would show: each counted over
 // what the list's other filters keep (facetBase), its own left out (the
 // sets as with the maintainer and platform picked). The platforms: of
@@ -530,17 +620,21 @@ const facetOption = (value, label, count, picked) =>
 
 function refineHtml() {
   const facets = facetOptions();
-  const setCount = (v) => facets.sets.find(([s]) => s === v)?.[1] || 0;
+  // python3Packages (an alias, ?in=): its sets' counts together.
+  const setCount = (v) =>
+    facets.sets.filter(([s]) => inPickedSet(s, v)).reduce((n, [, c]) => n + c, 0);
   const sets =
     inFilter && !facets.sets.some(([s]) => s === inFilter)
       ? [...facets.sets, [inFilter, 0]]
       : facets.sets;
   return html`<div class="refine" role="group" aria-label="Narrow the list">${Object.entries(
     REFINES,
-  ).map(
-    ([key, r]) =>
-      html`<button type="button" class="refine-btn" data-refine="${key}" aria-pressed="${refines.has(key)}" title="${r.title}">${r.label}</button>`,
-  )}${
+  )
+    .filter(([, r]) => !r.pick)
+    .map(
+      ([key, r]) =>
+        html`<button type="button" class="refine-btn" data-refine="${key}" aria-pressed="${refines.has(key)}" title="${r.title}${key === 'stagingnext' && stagingNextWhy() ? `. Now: ${stagingNextWhy()}` : ''}${refines.has(key) ? ' (on: click to remove)' : ''}">${r.label}</button>`,
+    )}${prPick()}${newerPick()}${sortPick()}${errorsPick()}${
     // On a maintainer's page: ?team=none.
     shownHandle()
       ? html`<button type="button" class="refine-btn" data-no-team aria-pressed="${noTeam}" title="Only packages that list this maintainer themselves: leave out those they maintain only as a member of the package's team (meta.teams)">Not via a team</button>`
@@ -787,22 +881,43 @@ const BOT_ICON = raw(
   '<svg class="bot-icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.6v2"/><circle cx="8" cy="1.8" r="0.9" fill="currentColor" stroke="none"/><rect x="2.75" y="4.6" width="10.5" height="8.4" rx="2.2"/><circle cx="6" cy="8.6" r="1.05" fill="currentColor" stroke="none"/><circle cx="10" cy="8.6" r="1.05" fill="currentColor" stroke="none"/><path d="M1 7.8v2.2M15 7.8v2.2"/></svg>',
 );
 
-// The robot, joined to the update cell's button: nixpkgs-update will try the
-// package (it's in the bot's queue). Green when to the newest version shown
-// and its last attempt didn't fail, so its PR should follow; amber when it
-// will try but it's unsure: its last attempt didn't work, it would update
-// to another version, or only the package's updateScript runs (an outdated
-// package's: the script decides the version). Not with an update PR open or
-// merged already (its badge says it). Like the cell's button, it opens the
-// update panel, which says when.
-function queuedTag(pkg) {
-  const q = queuedState(pkg);
-  return q
-    ? html`<button type="button" class="queued-tag${q.match ? ' match' : ''}" data-kind="update" aria-expanded="false" aria-label="Queued: ${q.title}" title="${q.title}">${BOT_ICON}</button>`
-    : '';
-}
+// A hard hat (Hydra's builders), in the text's colour: a failing build's
+// mark in the build cell, as the robot is a failed update's.
+const HAT_ICON = raw(
+  '<svg class="bot-icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 11V9.6a4.8 4.8 0 0 1 9.6 0V11"/><path d="M6.6 5.1v3M9.4 5.1v3"/><rect x="1.5" y="11" width="13" height="2.4" rx="1.2"/></svg>',
+);
 
-// Whether nixpkgs-update is set to try the package (queuedTag's robot):
+// GitHub's own icons (Octicons, (c) GitHub, MIT licence), 14px, in the
+// text's colour: an open PR, a draft, a merged one, an open issue. In the
+// list's GitHub cell and before each PR and issue in a package's details.
+const octicon = (d) =>
+  raw(
+    `<svg class="gh-icon" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">${d
+      .map((p) => `<path d="${p}"/>`)
+      .join('')}</svg>`,
+  );
+const GH_ICONS = {
+  pr: octicon([
+    'M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z',
+  ]),
+  draft: octicon([
+    'M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z',
+  ]),
+  merged: octicon([
+    'M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z',
+  ]),
+  issue: octicon([
+    'M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z',
+    'M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z',
+  ]),
+};
+
+// The robot in place of a cell's dot (updateCell): red, or "queued" amber
+// and "match" green, the queue's colours (queuedState).
+const botMark = (colour) =>
+  html`<span class="bot-mark${colour ? ` ${colour}` : ''}" aria-hidden="true">${BOT_ICON}</span>`;
+
+// Whether nixpkgs-update is set to try the package (the update cell's robot):
 // { match: to the newest version, its last attempt fine, so its PR should
 // follow; title }, or null.
 function queuedState(pkg) {
@@ -860,6 +975,25 @@ function botDueText(pkg) {
 // failing check) beside the newest. Screen readers get the two versions in a
 // sentence instead. Both versions are one button: it copies the update's
 // title as nixpkgs writes it ("unciv: 4.22.1 -> 4.22.6").
+// Whether a line's version and its badges won't fit side by side in the
+// version column (its narrowest, about 28 characters of the version's
+// font): then the badges go under the versions instead (.vcell.long), or
+// they squeezed a long version into a line per few characters
+// (linuxKernel.packages.linux_6_6.tbs's 7.2.11-unstable-2025-12-15, beside
+// devel and on master, took 8 lines). Badges stack within their column, so
+// the widest counts: about 0.95 of a character each, with 1.5 for the
+// padding ("only in nixpkgs", 113px, fits beside 2020-01-31 at 1,081px).
+const VERSION_LINE = 28;
+function tooWide(version, badges) {
+  const widest = Math.max(
+    0,
+    ...[...String(badges).matchAll(/class="badge[^"]*"[^>]*>([^<]*)</g)].map(
+      (m) => m[1].length * 0.95 + 1.5,
+    ),
+  );
+  return widest > 0 && String(version || '').length + 2 + widest > VERSION_LINE;
+}
+
 function versionCell(pkg, st) {
   if (st === 'missing') return html`<span class="badge missing">not packaged</span>`;
   const now = pkg.nixVersion;
@@ -867,9 +1001,9 @@ function versionCell(pkg, st) {
   const failing = stale
     ? html`<span class="badge neutral" title="${staleText(stale, "nixkeeper's update check failing")}. ${communityCheck(pkg) ? "It's a community rule: report it to nixkeeper, or give the package a rule of your own." : 'Fix it in package-lists/update-checks.nix.'}">check failing</span>`
     : '';
-  const about = html`${pkg.set ? bulkBadge(pkg.set) : ''}${olderVersionKept(pkg) ? html`<span class="badge neutral" title="${keptText(pkg)}">older version</span>` : pkg.unversioned && st === 'neutral' ? html`<span class="badge neutral" title="${UNVERSIONED_TITLE}">not versioned</span>` : st === 'neutral' ? html`<span class="badge neutral"${pkg.nixStatus === 'unsupported' ? html` title="${UNSUPPORTED_TEXT}"` : ''}>${statusLabel(pkg.nixStatus)}</span>` : ''}${pkg.archived ? html`<span class="badge warn" title="${archivedText(pkg)}">archived</span>` : ''}${pkg.dropPR && !pkg.dropPR.proposed ? html`<span class="badge warn" title="An open PR removes it from nixpkgs: #${pkg.dropPR.number} (${pkg.dropPR.title})">being removed</span>` : ''}${pkg.feed?.heldBack && st === 'ok' ? html`<span class="badge neutral" title="nixpkgs pins it to ${pkg.feed.name}: Hackage has ${pkg.feed.heldBack}, which Stackage holds back until its next series">Stackage LTS</span>` : ''}${pkg.devel ? html`<span class="badge devel ${st}">devel</span>` : ''}${vulnBadge(pkg)}${pkg.staleSince ? html`<span class="badge neutral" title="Repology lookup failed on the last run; this is data from ${new Date(pkg.staleSince).toLocaleString()}">not refreshed</span>` : pkg.lookupFailed ? html`<span class="badge neutral" title="${LOOKUP_FAILED}">not looked up</span>` : ''}`;
+  const about = html`${pkg.set ? bulkBadge(pkg.set) : ''}${olderVersionKept(pkg) ? html`<span class="badge neutral" title="${keptText(pkg)}">older version</span>` : pkg.unversioned && st === 'neutral' ? html`<span class="badge neutral" title="${UNVERSIONED_TITLE}">not versioned</span>` : st === 'neutral' ? html`<span class="badge neutral"${pkg.nixStatus === 'unsupported' ? html` title="${UNSUPPORTED_TEXT}"` : nothingCompared(pkg) ? html` title="${ONLY_NIXPKGS_TEXT}"` : ''}>${statusLabel(pkg.nixStatus)}</span>` : ''}${pkg.archived ? html`<span class="badge warn" title="${archivedText(pkg)}">archived</span>` : ''}${pkg.dropPR && !pkg.dropPR.proposed ? html`<span class="badge warn" title="An open PR removes it from nixpkgs: #${pkg.dropPR.number} (${pkg.dropPR.title})">being removed</span>` : ''}${pkg.feed?.heldBack && st === 'ok' ? html`<span class="badge neutral" title="nixpkgs pins it to ${pkg.feed.name}: Hackage has ${pkg.feed.heldBack}, which Stackage holds back until its next series">Stackage LTS</span>` : ''}${pkg.devel ? html`<span class="badge devel ${st}">devel</span>` : ''}${vulnBadge(pkg)}${pkg.staleSince ? html`<span class="badge neutral" title="Repology lookup failed on the last run; this is data from ${new Date(pkg.staleSince).toLocaleString()}">not refreshed</span>` : pkg.lookupFailed ? html`<span class="badge neutral" title="${LOOKUP_FAILED}">not looked up</span>` : ''}`;
   if (st !== 'warn')
-    return html`<div class="vcell"><span class="v-now"><span class="v">${now}</span></span><span class="v-tags top">${about}${failing}</span></div>`;
+    return html`<div class="vcell${tooWide(now, html`${about}${failing}`) ? ' long' : ''}"><span class="v-now"><span class="v">${now}</span></span><span class="v-tags top">${about}${failing}</span></div>`;
   const target = targetVersion(pkg);
   const merged = waitingForChannel(pkg);
   const title = updateTitle(pkg);
@@ -895,7 +1029,11 @@ function versionCell(pkg, st) {
   const said = mid
     ? `${now}, on master ${mid}, newest ${target || 'unknown'}`
     : `${now}, newest ${target || 'unknown'}`;
-  return html`<div class="vcell${mid ? ' three' : ''}">
+  const long =
+    tooWide(now, about) ||
+    (mid && tooWide(mid, masterBadge(pkg))) ||
+    tooWide(target, html`${update}${failing}`);
+  return html`<div class="vcell${mid ? ' three' : ''}${long ? ' long' : ''}">
     <button type="button" class="vcopy" data-copy="${title || ''}" title="Copy “${title || ''}”">
     <span class="v-now"><span class="v" aria-hidden="true">${now}</span><span class="sr-only">${said}</span></span>
     ${steps}
@@ -981,7 +1119,8 @@ function readViewFromUrl() {
   document.getElementById('search').value = maintainers.handle
     ? `@${maintainers.handle}`
     : params.get('q') || '';
-  sortAZ = params.get('sort') === 'az';
+  sortMode = SORTS[params.get('sort')] ? params.get('sort') : 'pressing';
+  sortReverse = params.get('order') === 'reverse';
   platformFilter =
     Object.keys(PLATFORMS).find((k) =>
       [PLATFORMS[k].param, PLATFORMS[k].also].includes(params.get('platform')),
@@ -1012,12 +1151,13 @@ function readViewFromUrl() {
   const by = (params.get('by') || '').replace(/^@/, '').toLowerCase();
   byFilter = /^[\w.-]{1,60}$/.test(by) ? by : null;
   statusFilter = NAME_STATUSES[params.get('status')] ? params.get('status') : null;
+  newerFilter = ['yes', 'no'].includes(params.get('newer')) ? params.get('newer') : null;
+  showErrors = params.get('errors') === '1';
   const ofTeam = params.get('ofteam') || '';
   matchTeam = /^[\w .+-]{1,60}$/.test(ofTeam) ? ofTeam : null;
   pageNum = Math.max(1, Number.parseInt(params.get('page'), 10) || 1);
   const per = Number(params.get('per'));
   pageSize = PAGE_SIZES.includes(per) ? per : DEFAULT_PAGE_SIZE;
-  document.getElementById('sortBtn').setAttribute('aria-pressed', sortAZ);
 }
 
 // The address for the current view, on page `page`.
@@ -1030,7 +1170,8 @@ function viewQuery(page = pageNum) {
   const handle = q.startsWith('@') && q.length > 1 ? q.slice(1) : '';
   set('maintainer', maintainersParam({ handle, leftOut: maintainersLeftOut }));
   set('q', handle ? '' : q);
-  set('sort', sortAZ ? 'az' : '');
+  set('sort', sortMode === 'pressing' ? '' : sortMode);
+  set('order', sortReverse ? 'reverse' : '');
   set('platform', platformFilter && PLATFORMS[platformFilter].param);
   set('list', listFilter);
   set('team', teamsParam({ include: teamFilter, leftOut: teamsLeftOut, none: noTeam }));
@@ -1045,6 +1186,8 @@ function viewQuery(page = pageNum) {
   set('in', inFilter);
   set('by', byFilter);
   set('status', statusFilter);
+  set('newer', newerFilter);
+  set('errors', showErrors ? '1' : '');
   set('ofteam', matchTeam);
   params.delete('because'); // the old name, written as the new one
   set('page', page > 1 ? page : '');
@@ -1166,7 +1309,10 @@ function setSitePalette(palette) {
 // The row's dot, on hover (the legend popover lists them all).
 // Repology's statuses as the page says them, where the code isn't clear
 // ("unlisted": with every package, one Repology doesn't know).
-const STATUS_LABEL = { unlisted: 'not on Repology' };
+const STATUS_LABEL = { unlisted: 'not on Repology', unique: 'only in nixpkgs' };
+// Repology's unique with nothing to compare (nothingCompared).
+const ONLY_NIXPKGS_TEXT =
+  "Only nixpkgs packages it, and nixkeeper has no update check for it: there's nothing to compare its version with";
 // nixpkgs' 0-unsupported (rows.UNSUPPORTED): not built in its default
 // configuration, so no version to compare.
 const UNSUPPORTED_TEXT =
@@ -1402,6 +1548,20 @@ function sourcesHtml() {
       ? html`<li class="src-digest"><a class="files-link" href="${url}" target="_blank" rel="noopener">${url.split('/').pop()}</a></li>${mine.map(row)}`
       : '';
   });
+  // nixkeeper.com: every source, and whether each is on time, is the status
+  // page's (it was a screenful here, too long for a phone). Elsewhere (an
+  // instance of its own, a preview), the list as before: the status page
+  // isn't about its runs.
+  if (location.hostname === 'nixkeeper.com') {
+    const nix = noted('nixpkgs');
+    return html`<p class="pop-title">Where the data is from</p>
+    <ul>
+      <li><b>Last sync</b><span title="${checkedAt ? when(checkedAt) : ''}">${checkedAt ? `${timeAgo(checkedAt)}, ${when(checkedAt)}` : 'not yet'}</span></li>
+      ${nix?.used ? html`<li><b>nixpkgs</b><span>${SOURCES[0].says(nix)}</span></li>` : ''}
+    </ul>
+    <a class="files-link" href="https://status.nixkeeper.com/" target="_blank" rel="noopener">Every source, and how fresh it is ↗</a>
+    <a class="files-link" href="https://github.com/nixkeeper/nixkeeper/blob/main/docs/how-it-works.md" target="_blank" rel="noopener">How nixkeeper gathers it ↗</a>`;
+  }
   return html`<p class="pop-title">Where the data is from</p>
     <ul>
       <li><b>Last sync</b><span title="${checkedAt ? when(checkedAt) : ''}">${checkedAt ? `${timeAgo(checkedAt)}, ${when(checkedAt)}` : 'not yet'}</span></li>
@@ -1663,6 +1823,73 @@ function mergeHtml(path, handle) {
   </section>`;
 }
 
+// On a maintainer's or a team's page: the open update PRs nixpkgs is
+// already past, on its packages (the rows' supersededPRs): "Can be closed".
+// Hide as for "You can merge these" (in this browser, until it changes).
+const CLOSE_SHOWN = 5;
+let closeAll = false;
+function closeHtml(path, handle) {
+  const mine = path.startsWith('views/maintainer/') && handle && handle !== 'none';
+  const team = path.startsWith('views/team/');
+  if (!mine && !team) return '';
+  const who = (handle || '').toLowerCase();
+  const theirs = team && teamName();
+  const seen = new Set();
+  const prs = packages
+    .filter((p) => !team || !p.teamsByList?.includes(theirs))
+    .flatMap((p) => (p.supersededPRs || []).map((pr) => ({ ...pr, pkg: p.name })))
+    .filter((pr) => !seen.has(pr.number) && seen.add(pr.number))
+    .sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
+  if (!prs.length) return '';
+  const hiddenN = prs.filter(isPrHidden).length;
+  const listed = showHiddenPrs ? prs : prs.filter((p) => !isPrHidden(p));
+  if (!listed.length) return '';
+  const shown = closeAll ? listed : listed.slice(0, CLOSE_SHOWN);
+  const days = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000));
+  const line = (p) => {
+    const own = mine && p.author.toLowerCase() === who;
+    const facts = [
+      own ? html`<b>your own PR</b>` : `by @${p.author}`,
+      html`<span title="Opened ${new Date(p.created).toLocaleDateString()}">open ${fmt(days(p.created))} days</span>`,
+      p.init
+        ? html`nixpkgs has it now (<span class="mono">${p.now}</span>), added another way`
+        : html`nixpkgs has <span class="mono">${p.now}</span>`,
+      p.draft && 'a draft',
+    ].filter(Boolean);
+    const hidden = isPrHidden(p);
+    return html`<li${hidden ? raw(' class="is-hidden"') : ''}><a class="files-link" href="https://github.com/NixOS/nixpkgs/pull/${p.number}" target="_blank" rel="noopener">${p.title}</a> <span class="merge-n">#${p.number}</span><button type="button" class="merge-hide" data-pr="${p.number}" title="${hidden ? 'Shown again here' : 'Leave it out of this list, in this browser only, until it changes'}">${hidden ? 'Show it again' : 'Hide'}</button><span class="merge-facts">${facts.map((f, i) => html`${i ? ' · ' : ''}${f}`)}</span></li>`;
+  };
+  const n = listed.length;
+  // Init PRs for a package nixpkgs has now among them (prs_digest.mark_superseded).
+  const inits = listed.filter((p) => p.init).length;
+  const kind = !inits ? 'update PR' : inits === n ? 'init PR' : 'PR';
+  const why = !inits
+    ? 'nixpkgs already has their version or a newer one'
+    : inits === n
+      ? 'nixpkgs has the package they add now'
+      : 'nixpkgs already has their version or a newer one, or the package they add';
+  const more =
+    listed.length > CLOSE_SHOWN
+      ? html`<button type="button" class="merge-more" data-close-more>${closeAll ? 'Show fewer' : `Show all ${fmt(listed.length)}`}</button>`
+      : '';
+  return html`<section class="merge-block close-block" aria-labelledby="closeHead">
+    <h3 id="closeHead">${n === 1 ? `This ${kind} can` : html`These ${fmt(n)} ${kind}s can`} be closed <span class="scope-hint">${why}${hiddenN && !showHiddenPrs ? html` · ${fmt(hiddenN)} hidden` : ''}</span></h3>
+    <ul class="merge-list">${shown.map(line)}</ul>
+    ${more}
+    <p class="merge-how">${
+      !inits
+        ? 'Close it with a word on why (nixpkgs has a newer version), or update it to the newest.'
+        : inits === n
+          ? "Close it with a word on why (nixpkgs has the package now), or turn it into an update of nixpkgs' package."
+          : 'Close it with a word on why (nixpkgs has a newer version, or has the package now), or update it to the newest.'
+    }${
+      community && manifest.views?.superseded
+        ? html` <a class="files-link" href="${scopeHref({ view: 'superseded' })}" data-card-view="superseded">All ${fmt(manifest.views.superseded)} packages with one, in all of nixpkgs →</a>`
+        : ''
+    }</p>
+  </section>`;
+}
+
 function loadNames() {
   if (namesLoading) return;
   namesLoading = fetch(dataUrl('names.json'), { cache: 'no-store' })
@@ -1768,6 +1995,7 @@ async function loadIndex() {
       // logo and the tab's title say so (index.html has nixkeeper.com's;
       // link previews, which run no script, keep it).
       document.querySelector('.wordmark .tag').textContent = OWN_TAG;
+      document.documentElement.dataset.start = 'list'; // its skeleton (theme.js)
       document.title = `nixkeeper — ${OWN_TAG}`;
     }
     // The nixkeeper that made the data, in the footer (older data has none).
@@ -1980,10 +2208,19 @@ const CHEVRON = raw(
   '<svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
 );
 
+// What a row's dot means, in words: its colour's, or why it's grey when
+// only nixpkgs packages it.
+const dotTitle = (pkg, st) =>
+  waitingForChannel(pkg)
+    ? DOT_TITLE.merged
+    : nothingCompared(pkg)
+      ? `Not compared: ${ONLY_NIXPKGS_TEXT.charAt(0).toLowerCase()}${ONLY_NIXPKGS_TEXT.slice(1)}`
+      : DOT_TITLE[st];
+
 function rowHtml(pkg, i) {
   const st = computeStatus(pkg);
   return html`<tr class="row${isHidden(pkg) ? ' is-hidden' : ''}${inOpenFold.has(pkg.name) ? ' fold-member' : ''}" tabindex="0" data-i="${i}">
-      <td class="c-name"><div class="pkg-name"><span class="who"><span class="status-dot ${waitingForChannel(pkg) ? 'merged' : st}" role="img" aria-label="${waitingForChannel(pkg) ? DOT_TITLE.merged : DOT_TITLE[st]}" title="${waitingForChannel(pkg) ? DOT_TITLE.merged : DOT_TITLE[st]}"></span><span class="n">${breakableName(pkg.name)} ${ageTag(pkg, st)}</span></span>${platformTags(pkg)}${foldButton(pkg)}</div></td>
+      <td class="c-name"><div class="pkg-name"><span class="who"><span class="status-dot ${waitingForChannel(pkg) ? 'merged' : st}" role="img" aria-label="${dotTitle(pkg, st)}" title="${dotTitle(pkg, st)}"></span><a class="n pkg-link" href="${scopeHref({ pkg: pkg.name })}" tabindex="-1">${breakableName(pkg.name)} ${ageTag(pkg, st)}</a></span>${platformTags(pkg)}${foldButton(pkg)}</div></td>
       <td class="c-ver ver mono">${versionCell(pkg, st)}</td>
       <td class="c-gh${pkg.openPRs || pkg.openIssues ? '' : ' quiet'}">${githubLinks(pkg)}</td>
       <td class="c-build">${buildCell(pkg)}</td>
@@ -2090,6 +2327,7 @@ async function render(list, { keepPage = false, run = updateRun } = {}) {
     </tr></thead>
     <tbody id="rows">${shown.slice(0, FIRST_ROWS).map(rowHtml)}</tbody>
   </table></div>${pagerHtml(list.length, pages)}${moreMatchesHtml()}`;
+  watchErrors();
   // One package shown by its link (?pkg=): its details open at once, the
   // reason the link was followed.
   if (pkgParam && list.length === 1 && pkgOpenedFor !== pkgParam) {
@@ -2107,6 +2345,47 @@ async function render(list, { keepPage = false, run = updateRun } = {}) {
       'beforeend',
       String(html`${shown.slice(FIRST_ROWS).map((pkg, i) => rowHtml(pkg, FIRST_ROWS + i))}`),
     );
+  watchErrors();
+}
+
+// Show errors (errorsHere): each failing row's build panel, opened under it
+// as it comes near the screen, so a page of 200 loads only what's looked
+// at. Beside the panel a click opens: that one closes the others, these
+// stay; a click on one of these works as on any panel.
+let errorsObserver = null;
+function watchErrors() {
+  errorsObserver?.disconnect();
+  errorsObserver = null;
+  if (!errorsHere()) return;
+  errorsObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        errorsObserver?.unobserve(entry.target);
+        openErrors(entry.target);
+      }
+    },
+    { rootMargin: '600px 0px' },
+  );
+  for (const tr of document.querySelectorAll('#rows tr.row')) {
+    const pkg = shown[tr.dataset.i];
+    if (pkg && failedBuilds(pkg).length) errorsObserver.observe(tr);
+  }
+}
+async function openErrors(tr) {
+  if (tr.nextElementSibling?.classList.contains('detail')) return;
+  const pkg = shown[tr.dataset.i];
+  const detail = document.createElement('tr');
+  detail.className = 'detail open errors';
+  detail.dataset.mode = 'build';
+  detail.innerHTML = `<td colspan="6"><div class="detail-inner">
+      <div class="nix-line">Loading its builds…</div>
+    </div></td>`;
+  tr.after(detail);
+  const row = await fullRow(pkg);
+  const inner = detail.querySelector('.detail-inner');
+  if (row) fillBuilds(row, inner);
+  else inner.innerHTML = html`<div class="nix-line">Couldn't load its builds.</div>`;
 }
 
 // With every package, the header. The overview (no list chosen): all of
@@ -2624,6 +2903,11 @@ function numbersHtml() {
       'ready for the merge bot',
       html`PRs waiting for their own maintainers (${fmt(m.maintainers)} people could each merge one), ${fmt(m.over90)} for over three months. Yours: "You can merge these", on <a class="files-link" href="${scopeHref({ view: 'maintainers' })}" data-card-view="maintainers">your page</a>`,
     ],
+    manifest.close?.prs != null && [
+      fmt(manifest.close.prs),
+      'update PRs nixpkgs is past',
+      html`it already has their version or a newer one: they can be closed (${fmt(manifest.close.bot)} of them the update bot's)${manifest.close.init ? `, and ${fmt(manifest.close.init)} init PRs for a package it has now` : ''}. Yours: "Can be closed", on <a class="files-link" href="${scopeHref({ view: 'maintainers' })}" data-card-view="maintainers">your page</a>${link(scopeHref({ view: 'superseded' }), 'all of them')}`,
+    ],
     [
       fmt(n.behind),
       'update PRs behind upstream',
@@ -2734,9 +3018,11 @@ function listHeaderHtml() {
                   ? 'Blocked by a dependency'
                   : path === 'views/unbuilt.json'
                     ? 'Not built where listed'
-                    : path === 'views/backport.json'
-                      ? 'Fixes to backport'
-                      : 'Needs attention';
+                    : path === 'views/superseded.json'
+                      ? 'Update PRs to close'
+                      : path === 'views/backport.json'
+                        ? 'Fixes to backport'
+                        : 'Needs attention';
   return html`<h2 class="sr-only">${what}</h2>
     <div class="scope-view">
       <span class="scope-label">Showing</span>
@@ -2745,20 +3031,29 @@ function listHeaderHtml() {
         hiddenHere
           ? html`<button type="button" class="hidden-toggle" aria-pressed="${showHidden}" title="Packages you hid here, in this browser, until what they need attention for changes">${fmt(hiddenHere)} hidden · ${showHidden ? 'hide them' : 'show them'}</button>`
           : ''
-      }
+      }<button type="button" class="close-all" title="Close every open package (Esc)" hidden>Close all</button>
       ${path.startsWith('views/cause/') && causeShown ? html`<span class="scope-hint cause-line" title="The error line these builds share (paths, numbers and names vary)"><code>${causeShown.line}</code></span>` : ''}
       ${
         // Marked broken's neighbour: listed for a platform, never built there.
         path === 'views/broken.json' && manifest.views?.unbuilt
           ? html`<a class="scope-hint files-link" href="${scopeHref({ view: 'unbuilt' })}" title="Packages nixpkgs lists for a platform Hydra doesn't build them on: usually a dependency isn't available there">also: ${fmt(manifest.views.unbuilt)} not built where listed →</a>`
-          : path === 'views/unbuilt.json'
-            ? html`<span class="scope-hint">listed for a platform Hydra doesn't build them on (struck tags); pick a platform to see its own</span>`
-            : ''
+          : path === 'views/superseded.json'
+            ? html`<span class="scope-hint">an open update PR nixpkgs is already past (it has the PR’s version or a newer one): each package’s details link it</span>`
+            : path === 'views/unbuilt.json'
+              ? html`<span class="scope-hint">listed for a platform Hydra doesn't build them on (struck tags); pick a platform to see its own</span>`
+              : ''
+      }
+      ${
+        // "PR to close" on in another list: the whole of nixpkgs' are a view.
+        refines.has('superseded') && path !== 'views/superseded.json' && manifest.views?.superseded
+          ? html`<a class="scope-hint files-link" href="${scopeHref({ view: 'superseded' })}" data-card-view="superseded" title="Every package with an open update PR nixpkgs is already past, up to date or not">also: ${fmt(manifest.views.superseded)} in all of nixpkgs →</a>`
+          : ''
       }
       ${path.startsWith('views/set/') ? html`<span class="scope-hint">${bulkText(setFilter)}${profileOf(setFilter) ? html` (<a class="files-link" href="${safeUrl(profileOf(setFilter).link)}" target="_blank" rel="noopener">in nixpkgs ↗</a>)` : ''}</span>` : ''}
       ${teamPicker('Any team')}${teamOutChips()}
     </div>
     ${mergeHtml(path, handle)}
+    ${closeHtml(path, handle)}
     ${
       // One package: its row says it all, the tiles would only count to 1.
       path.startsWith('pkg:') ? '' : html`<div class="tiles">${tiles}</div>${refineHtml()}`
@@ -2788,6 +3083,8 @@ function scopeHref({ set = null, pkg = null, view = null, filter = null, cause =
     'by',
     'status',
     'ofteam',
+    'newer',
+    'errors',
   ])
     params.delete(k);
   if (set) params.set('set', set);
@@ -2821,6 +3118,8 @@ function showView({ set = null, pkg = null, view = null, filter = null, cause = 
   byFilter = null;
   statusFilter = null;
   matchTeam = null;
+  newerFilter = null;
+  showErrors = false;
   document.getElementById('search').value = '';
   update();
   // From the page's top, as a new page would: scrolling the view's header
@@ -2913,8 +3212,12 @@ function moreMatchesHtml() {
   );
   const shownHere = kept.slice(0, matchLimit);
   const setLabel = (v) => (v === TOP_LEVEL ? 'top level' : v);
+  // python3Packages (an alias, ?in=): offered with its sets' counts together.
+  const aliasCount = (v) => sets.filter(([s]) => inPickedSet(s, v)).reduce((n, [, c]) => n + c, 0);
   const setChoices =
-    inFilter && !sets.some(([v]) => v === inFilter) ? [...sets, [inFilter, 0]] : sets;
+    inFilter && !sets.some(([v]) => v === inFilter)
+      ? [...sets, [inFilter, aliasCount(inFilter)]]
+      : sets;
   const statusChoices =
     statusFilter && !statuses.some(([v]) => v === statusFilter)
       ? [...statuses, [statusFilter, 0]]
@@ -2970,30 +3273,35 @@ function matchFacetsHtml(by, teams, platforms) {
 
 // One panel under the row, showing the package details (clicking the row),
 // its builds or its latest update attempt (clicking those cells). Clicking
-// what's shown closes it; clicking something else switches.
-// One package open at a time: opening another row's panel closes the rest
-// (the same row switches between its panels in place). The clicked row stays
-// where it was on screen, though a panel above it closes.
-function closeOthers(tr) {
-  const others = [...document.querySelectorAll('tbody tr.row.open')].filter((o) => o !== tr);
-  if (!others.length) return;
-  const top = tr.getBoundingClientRect().top;
-  for (const other of others) {
-    other.classList.remove('open');
-    const detail = other.nextElementSibling;
+// what's shown closes it; clicking something else switches. Each row opens
+// and closes on its own, several at once (they used to close the others);
+// "Close all" beside the list's count, or Esc, closes them all.
+function closeRows(rows) {
+  for (const tr of rows) {
+    tr.classList.remove('open');
+    const detail = tr.nextElementSibling;
     if (detail?.classList.contains('detail')) {
       detail.classList.remove('open');
       detail.dataset.mode = '';
     }
-    for (const btn of other.querySelectorAll('.failure-btn, .queued-tag')) {
+    for (const btn of tr.querySelectorAll('.failure-btn')) {
       btn.setAttribute('aria-expanded', 'false');
     }
   }
-  window.scrollBy(0, tr.getBoundingClientRect().top - top);
+  syncCloseAll();
+}
+const openRows = () => [...document.querySelectorAll('tbody tr.row.open')];
+
+// "Close all (3)" beside the list's count, while two or more are open.
+function syncCloseAll() {
+  const btn = document.querySelector('button.close-all');
+  if (!btn) return;
+  const n = openRows().length;
+  btn.hidden = n < 2;
+  btn.textContent = `Close all (${fmt(n)})`;
 }
 
 async function toggle(tr, mode) {
-  closeOthers(tr);
   const pkg = shown[tr.dataset.i];
   let detail = tr.nextElementSibling;
   if (!detail?.classList.contains('detail')) {
@@ -3009,9 +3317,10 @@ async function toggle(tr, mode) {
   tr.classList.toggle('open', !closing);
   detail.classList.toggle('open', !closing);
   detail.dataset.mode = closing ? '' : mode;
-  for (const btn of tr.querySelectorAll('.failure-btn, .queued-tag')) {
+  for (const btn of tr.querySelectorAll('.failure-btn')) {
     btn.setAttribute('aria-expanded', !closing && btn.dataset.kind === mode);
   }
+  syncCloseAll();
   if (closing) return;
   // The panel needs the full row (the list has the summary's entry).
   const row = await fullRow(pkg);
@@ -3069,6 +3378,17 @@ document.getElementById('content').addEventListener('click', (e) => {
     return;
   }
   const tr = e.target.closest('tr.row');
+  // Its name is a link to it alone (?pkg=): a plain click opens it here,
+  // as anywhere on the row; with a modifier, a tab of its own, as links do.
+  if (
+    tr &&
+    e.target.closest('a.pkg-link') &&
+    !(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button)
+  ) {
+    e.preventDefault();
+    toggle(tr, 'info');
+    return;
+  }
   if (!tr || e.target.closest('a')) return;
   const copy = e.target.closest('.vcopy');
   if (copy) {
@@ -3127,23 +3447,30 @@ function vulnBadge(pkg) {
 }
 
 // What each verdict on a CVE or advisory says (nixkeeper-vulnerabilities,
-// sources/vulnerabilities_digest.py); those in VULN_COUNTED count.
+// sources/vulnerabilities_digest.py); those in VULN_COUNTED count. Each:
+// [a word or two for the line, the sentence its hover says].
 const VERDICTS = {
-  affected: "affected: nixpkgs' version is in the CVE's range",
-  byVersion: "affected: nixpkgs' version is in the CVE's range", // data from before
-  tracker: "affected, says the tracker (the CVE's versions can't be read)",
-  wontFix: "won't fix",
-  osv: 'OSV advisory',
-  unconfirmed: "unconfirmed: the CVE's versions can't be read",
-  fixed: 'fixed',
-  patched: 'fixed by a patch in nixpkgs, named after it',
-  dismissed: 'dismissed by the security team',
+  affected: ['affected', "Affected: nixpkgs' version is in the CVE's range"],
+  byVersion: ['affected', "Affected: nixpkgs' version is in the CVE's range"], // data from before
+  tracker: ['affected', "Affected, says the security tracker (the CVE's versions can't be read)"],
+  wontFix: ["won't fix", "The security team won't fix it"],
+  osv: ['OSV advisory', "An OSV advisory that lists nixpkgs' version"],
+  unconfirmed: ['unconfirmed', "Unconfirmed: the CVE's versions can't be read"],
+  fixed: ['fixed', "Fixed in nixpkgs' version"],
+  patched: ['patched', 'Fixed by a patch in nixpkgs, named after it'],
+  dismissed: ['dismissed', 'Dismissed by the security team'],
 };
 
 // The panel's CVEs and advisories (the row's "vulnerabilities"), counted
-// ones first, worst first; the others folded: each with its severity, the
-// verdict, the tracker's issue and its GitHub issue, and the release
-// branches still affected (a fix to backport).
+// ones first, worst first; the others folded. What the counted ones share
+// is said once, above them: how many of each severity, the verdict and the
+// release branches still affected (a fix to backport), when the same for
+// all. Then they're grouped by the tracker's issue (its nixpkgs issue
+// linked once), a line each: the id, its severity and its summary (cut
+// short, whole on hover), and what it doesn't share. The worst VULNS_SHOWN,
+// then "Show all": zitadel's 24 took 48 lines, most of them repeating
+// (2026-10-23).
+const VULNS_SHOWN = 5;
 function vulnSection(pkg) {
   const all = pkg.vulnerabilities || [];
   if (!all.length) return '';
@@ -3154,30 +3481,164 @@ function vulnSection(pkg) {
   const stillAffected = (v) =>
     Object.entries(v.releases || {})
       .filter(([, status]) => status === 'affected')
-      .map(([branch]) => branch.replace(/^release-/, ''));
-  const line = (v) => {
+      .map(([branch]) => branch.replace(/^release-/, ''))
+      .join(', ');
+  const verdict = (v) =>
+    VERDICTS[v.verdict]
+      ? html`<span class="vl-verdict" title="${VERDICTS[v.verdict][1]}">${VERDICTS[v.verdict][0]}<span class="sr-only">: ${VERDICTS[v.verdict][1]}</span></span>`
+      : html`<span class="vl-verdict">${v.verdict}</span>`;
+  const issueLink = (v) =>
+    html`<a class="files-link mono" href="https://tracker.security.nixos.org/issues/${encodeURIComponent(v.issue)}" target="_blank" rel="noopener">${v.issue}</a>${v.github && safeUrl(v.github) ? html` (<a class="files-link" href="${safeUrl(v.github)}" target="_blank" rel="noopener">its nixpkgs issue</a>)` : ''}`;
+  // Open PRs patching it (prs_digest.add_cve_prs): "patched by #563607".
+  const patches = (prs, all = false) =>
+    html`${all ? 'all ' : ''}patched by ${prs.map(
+      (p, i) =>
+        html`${i ? ', ' : ''}<a class="files-link gh-item pr" href="https://github.com/NixOS/nixpkgs/pull/${p.number}" target="_blank" rel="noopener" title="${p.title}">${GH_ICONS.pr}<span class="sr-only">PR </span>#${p.number} ↗</a>${
+          p.base || p.draft
+            ? html` (${[p.base && html`into <span class="mono">${p.base}</span>`, p.draft && 'a draft'].filter(Boolean).map((x, k) => html`${k ? ', ' : ''}${x}`)})`
+            : ''
+        }`,
+    )}`;
+  const prKey = (v) => (v.prs || []).map((p) => p.number).join(',');
+  const sharedPRs = (vs) => vs.length > 1 && new Set(vs.map(prKey)).size === 1 && vs[0].prs;
+  // One line: its id, severity and summary; and, when they aren't said
+  // above (own: false), its verdict, its issue and the branches still affected.
+  const line = (
+    v,
+    {
+      sharedVerdict = false,
+      sharedReleases = false,
+      sharedFix = false,
+      sharedPR = false,
+      own = true,
+    } = {},
+    hidden = false,
+  ) => {
     const releases = stillAffected(v);
-    return html`<li class="vl"><a class="files-link mono" href="${link(v.id)}" target="_blank" rel="noopener">${v.id}</a>${
+    return html`<li class="vl"${hidden ? raw(' hidden') : ''}><a class="files-link mono" href="${link(v.id)}" target="_blank" rel="noopener">${v.id}</a>${
       v.severity ? html` <span class="sev sev-${v.severity}">${v.severity}</span>` : ''
-    } <span class="vl-verdict">${VERDICTS[v.verdict] || v.verdict}</span>${
-      v.issue
-        ? html` · <a class="files-link mono" href="https://tracker.security.nixos.org/issues/${encodeURIComponent(v.issue)}" target="_blank" rel="noopener">${v.issue}</a>`
+    }${sharedVerdict ? '' : html` ${verdict(v)}`}${v.summary ? html` <span class="vl-summary" title="${v.summary}">${v.summary}</span>` : ''}${
+      own && v.issue ? html`<span>· ${issueLink(v)}</span>` : ''
+    }${!sharedReleases && releases ? html`<span>· <span class="vl-backport">still affected on ${releases}</span></span>` : ''}${
+      !sharedFix && v.fixedIn
+        ? html`<span>· fixed in <span class="mono">${v.fixedIn}</span></span>`
         : ''
-    }${v.github && safeUrl(v.github) ? html` (<a class="files-link" href="${safeUrl(v.github)}" target="_blank" rel="noopener">its nixpkgs issue</a>)` : ''}${
-      releases.length
-        ? html` · <span class="vl-backport">still affected on ${releases.join(', ')}</span>`
-        : ''
-    }${v.summary ? html`<div class="vl-summary">${v.summary}</div>` : ''}</li>`;
+    }${!sharedPR && v.prs ? html`<span>· ${patches(v.prs)}</span>` : ''}</li>`;
   };
   const counted = all.filter((v) => VULN_COUNTED.includes(v.verdict));
   const rest = all.filter((v) => !VULN_COUNTED.includes(v.verdict));
-  return html`<section class="pd-sec"><h4 class="other-label">Vulnerabilities</h4>${
-    counted.length
-      ? html`<ul class="vl-list">${counted.map(line)}</ul>`
-      : html`<p class="pd-text">None counted.</p>`
-  }${
+  // What they all share, said once.
+  const verdicts = new Set(counted.map((v) => v.verdict));
+  const sharedVerdict = counted.length > 1 && verdicts.size === 1;
+  const releaseSets = new Set(counted.map(stillAffected));
+  const sharedReleases = counted.length > 1 && releaseSets.size === 1;
+  const fixSet = new Set(counted.map((v) => v.fixedIn));
+  const sharedFix = counted.length > 1 && fixSet.size === 1 && [...fixSet][0];
+  const sharedPR = sharedPRs(counted);
+  const restPR = sharedPRs(rest);
+  const word = counted.every((v) => v.id.startsWith('CVE-')) ? 'CVE' : 'advisory';
+  const severities = ['critical', 'high', 'medium', 'low']
+    .map((sev) => [sev, counted.filter((v) => v.severity === sev).length])
+    .filter(([, n]) => n);
+  const head =
+    counted.length > 1
+      ? html`<p class="vl-head">${fmt(counted.length)} ${word === 'CVE' ? 'CVEs' : 'advisories'}${
+          severities.length
+            ? html`: ${severities.map(([sev, n], i) => html`${i ? ', ' : ''}${fmt(n)} <span class="sev sev-${sev}">${sev}</span>`)}`
+            : ''
+        }${sharedVerdict ? html` · all ${verdict(counted[0])}` : ''}${
+          sharedReleases && [...releaseSets][0]
+            ? html` · <span class="vl-backport">still affected on ${[...releaseSets][0]}</span>`
+            : ''
+        }${sharedFix ? html` · all fixed in <span class="mono">${sharedFix}</span>` : ''}${
+          sharedPR ? html` · ${patches(sharedPR, true)}` : ''
+        }</p>`
+      : '';
+  // Grouped by the tracker's issue, in the order of their worst.
+  const groups = new Map();
+  for (const v of counted) groups.set(v.issue || '', [...(groups.get(v.issue || '') || []), v]);
+  let shownSoFar = 0;
+  const grouped = [...groups.values()].map((vs) => {
+    const first = shownSoFar;
+    shownSoFar += vs.length;
+    const hideGroup = first >= VULNS_SHOWN;
+    const opts = {
+      sharedVerdict,
+      sharedReleases,
+      sharedFix,
+      sharedPR,
+      own: !vs[0].issue || vs.length === 1,
+    };
+    return html`<div class="vl-group"${hideGroup ? raw(' hidden') : ''}>${
+      vs[0].issue && vs.length > 1
+        ? html`<p class="vl-issue">${issueLink(vs[0])} · ${fmt(vs.length)} ${word === 'CVE' ? 'CVEs' : 'advisories'}</p>`
+        : ''
+    }<ul class="vl-list">${vs.map((v, i) => line(v, opts, first + i >= VULNS_SHOWN))}</ul></div>`;
+  });
+  const more =
+    counted.length > VULNS_SHOWN
+      ? html`<button type="button" class="more-btn vl-more" aria-expanded="false" data-all="${counted.length}">Show all ${fmt(counted.length)}</button>`
+      : '';
+  // What fixes them, from the versions their ranges say do: master, its
+  // open update PR (here rather than as a pill under On GitHub) and the
+  // newest release. Without those, whether the PR's version fixes them is
+  // for a person to check.
+  const pr = pkg.openPR?.facts?.vulnerable && counted.length ? pkg.openPR : null;
+  const fixes = vulnFixes(pkg, counted);
+  const prItem = pr
+    ? html`<a class="files-link gh-item pr" href="${safeUrl(pr.url)}" target="_blank" rel="noopener">${GH_ICONS.pr}<span class="sr-only">PR </span>#${pr.number} ↗</a>`
+    : '';
+  const them = counted.length === 1 ? 'it' : 'them';
+  // Of those whose ranges name a version that fixes them: "fixes them",
+  // "fixes 3 of 5", with the version all of them need when it falls short.
+  const unnamed = fixes ? counted.length - fixes.named : 0;
+  const does = (k) => {
+    const of = !unnamed
+      ? ''
+      : fixes.named === 1
+        ? ' the one that names a fixed version'
+        : ` the ${fmt(fixes.named)} that name a fixed version`;
+    if (k >= fixes.named) return unnamed ? `fixes${of}` : `fixes ${them}`;
+    return k
+      ? `fixes ${fmt(k)} of${of || ` ${fmt(counted.length)}`}`
+      : `doesn't fix${of || ` ${them}`}`;
+  };
+  // A fix only in a newer series than nixpkgs' (mariadb 11.4 against
+  // 12.2.2): its own series may have it backported, which ranges miss.
+  const major = (v) => (v || '').split(/[.\-_+~]/)[0];
+  const backport =
+    fixes && major(fixes.need) !== major(pkg.nixVersion)
+      ? html` (a newer series: check whether nixpkgs' ${major(pkg.nixVersion)}.x has the fix backported)`
+      : '';
+  const need = (k) =>
+    k < fixes.named
+      ? html`: ${fixes.named > 1 ? 'all ' : ''}fixed in <span class="mono">${fixes.need}</span>${backport}`
+      : '';
+  const newest = targetVersion(pkg);
+  const fixLines = [];
+  if (fixes?.master)
+    fixLines.push(
+      html`Master has <span class="mono">${onMaster(pkg)}</span>, which ${does(fixes.master)}: it reaches the channel in a few days`,
+    );
+  if (pr)
+    fixLines.push(
+      fixes
+        ? html`${prItem} updates it to <span class="mono">${pr.to}</span>, which ${does(fixes.pr)}${need(fixes.pr)}; review it first`
+        : html`${prItem} updates it to <span class="mono">${pr.to}</span>: check whether that fixes ${them}, and review it first`,
+    );
+  if (fixes && fixes.master < fixes.named && (!pr || (fixes.pr < fixes.named && newest !== pr.to)))
+    fixLines.push(
+      newest && compareVersions(newest, pkg.nixVersion) > 0
+        ? html`${fixes.newest < fixes.named ? 'Even the' : 'The'} newest release, <span class="mono">${newest}</span>, ${does(fixes.newest)}${need(fixes.newest)}`
+        : html`${fixes.named > 1 ? 'All fixed' : 'Fixed'} in <span class="mono">${fixes.need}</span>, newer than any release nixkeeper knows of${backport}`,
+    );
+  return html`<section class="pd-sec vl-sec"><h4 class="other-label">Vulnerabilities</h4>${
+    counted.length ? html`${head}${grouped}${more}` : html`<p class="pd-text">None counted.</p>`
+  }${counted.length ? fixLines.map((l) => html`<p class="pd-text vl-pr">${l}</p>`) : ''}${
     rest.length
-      ? html`<details class="vl-rest"><summary>${rest.length} not counted (fixed, unconfirmed or dismissed)</summary><ul class="vl-list">${rest.map(line)}</ul></details>`
+      ? html`<details class="vl-rest"><summary>${rest.length} not counted (fixed, unconfirmed or dismissed)${
+          restPR ? html` · ${patches(restPR, true)}` : ''
+        }</summary><ul class="vl-list">${rest.map((v) => line(v, { sharedPR: Boolean(restPR) }))}</ul></details>`
       : ''
   }</section>`;
 }
@@ -3221,11 +3682,23 @@ const staleNote = (info, what, after) =>
 // quiet: nothing that needs attention, so it's drawn muted, without a dot
 // ("none reported" as a dash), and the phone layout leaves it out. Only
 // what needs a look keeps its colour.
-function failureButton(kind, dot, text, title, stale = null, quiet = false) {
+// mark: in place of the dot (a build's hard hat, the bot's robot), when
+// given; marked: what it says that the text doesn't, for screen readers
+// ("queued for an update").
+function failureButton(
+  kind,
+  dot,
+  text,
+  title,
+  stale = null,
+  quiet = false,
+  mark = null,
+  marked = '',
+) {
   const calm = quiet && !stale;
   const shown = calm && text === 'none reported' ? html`<span aria-hidden="true">—</span>` : text;
-  return html`<button class="failure-btn${dot === 'missing' ? ' failing' : ''}${calm ? ' calm' : ''}" type="button" data-kind="${kind}"${calm ? html` data-quiet aria-label="${kind}: ${text}"` : ''} aria-expanded="false" title="${title}">
-    <span class="status-dot ${dot}" aria-hidden="true"></span><span class="cell-label">${kind}:</span>${shown}${
+  return html`<button class="failure-btn${dot === 'missing' ? ' failing' : ''}${calm ? ' calm' : ''}" type="button" data-kind="${kind}"${calm ? html` data-quiet aria-label="${kind}: ${text}${marked ? `, ${marked}` : ''}"` : ''} aria-expanded="false" title="${title}">
+    ${mark || html`<span class="status-dot ${dot}" aria-hidden="true"></span>`}<span class="cell-label">${kind}:</span>${shown}${marked && !calm ? html`<span class="sr-only">, ${marked}</span>` : ''}${
       stale
         ? html` <span class="stale-tag" title="${staleText(stale, 'Not refreshed')}">not refreshed</span>`
         : ''
@@ -3242,70 +3715,93 @@ function buildCell(pkg) {
   if (!pkg.builds) return html`<span class="failure-na" title="Not in nixpkgs">—</span>`;
   const button = (dot, text, quiet = false) =>
     failureButton('build', dot, text, 'Show Hydra builds', notRefreshed(pkg, 'builds'), quiet);
+  // Failing, blocked or marked broken: the hard hat in place of the dot, in
+  // its colour, as the update column has the robot.
+  const hat = (dot, text) =>
+    failureButton(
+      'build',
+      dot,
+      text,
+      'Show Hydra builds',
+      notRefreshed(pkg, 'builds'),
+      false,
+      html`<span class="bot-mark${dot === 'caution' ? ' queued' : ''}" aria-hidden="true">${HAT_ICON}</span>`,
+    );
   // A failed build that never succeeded on Hydra: where, instead (the
   // panel lists the others).
   const never = neverWhere(pkg);
-  if (never) return button('missing', `never: ${never}`);
+  if (never) return hat('missing', `never: ${never}`);
   if (failedBuilds(pkg).length) {
-    // One reason for all of them (their logs, nixkeeper-hydra): it, as the
-    // update column says its own.
+    // One reason for all of them (their logs, nixkeeper-hydra): only it, as
+    // the update column says its own; the column says the rest.
     const [why, ...more] = buildFailedBecause(pkg, platformFilter);
     const known = !more.length && why !== 'unread' && BUILD_FAILED[why];
-    return button('missing', known ? `failed: ${known.short}` : 'failure reported');
+    return hat(
+      'missing',
+      html`<span class="sr-only">failed: </span>${known ? known.short : 'failure'}`,
+    );
   }
   // Known failures: shown, but not counted as failed.
   // Hydra's builds say where; a broken package often has no Hydra job at
   // all, and then only meta.broken does (markedBroken).
-  if (buildsWith(pkg, 'broken').length || pkg.markedBroken)
-    return button('caution', 'marked broken');
+  if (buildsWith(pkg, 'broken').length || pkg.markedBroken) return hat('caution', 'marked broken');
   // A dependency's failure stopped it: not its own, so not counted as failed.
-  if (buildsWith(pkg, 'dependency').length) return button('caution', 'blocked');
+  if (buildsWith(pkg, 'dependency').length) return hat('caution', 'blocked');
   if (!hydraBuildsIt(pkg)) return button('neutral', 'not built by Hydra', true);
   return button('ok', 'none reported', true);
 }
 
 // nixpkgs-update's latest attempt. `update` is null when the bot never tried
-// and missing for packages not in nixpkgs.
+// and missing for packages not in nixpkgs. When the bot is set to update it
+// (its queue), the robot is in front, in place of the dot: green when to
+// the newest version and its last attempt didn't fail, so its PR should
+// follow; amber when it will try but it's unsure (queuedState); its hover
+// says which, and the update panel when. Without the queue, a failure's robot is red and "can't
+// update"'s gold; the rest have no mark.
 function updateCell(pkg) {
-  const status = updateStatus(pkg);
-  // The bot set to update it: joined to the status, as the platforms are.
-  const queued = pkg.update === undefined ? '' : queuedTag(pkg);
-  return queued ? html`<span class="upd-pair">${status}${queued}</span>` : status;
-}
-
-function updateStatus(pkg) {
   // A set's, the bot never tried: its set's tooling updates it.
   if (pkg.set && !pkg.update)
-    return html`<span class="failure-na" title="${bulkText(pkg.set)}: nixpkgs-update hasn't tried it">—</span>`;
+    return queuedOrDash(pkg, `${bulkText(pkg.set)}: nixpkgs-update hasn't tried it`);
   if (pkg.update === undefined)
     return html`<span class="failure-na" title="Not in nixpkgs">—</span>`;
-  const button = (dot, text, quiet = false) =>
+  if (pkg.update === null && pkg.unversioned && !pkg.unread?.includes('update'))
+    return queuedOrDash(pkg, `${UNVERSIONED_TITLE}: nothing for nixpkgs-update to update`);
+  const q = queuedState(pkg);
+  const robot = botMark;
+  const button = (dot, text, quiet = false, unqueued = null) =>
     failureButton(
       'update',
       dot,
       text,
-      'Show the latest nixpkgs-update attempt',
+      `Show the latest nixpkgs-update attempt${q ? `. ${q.title.replace(/\. When: the update panel$/, '')}` : ''}`,
       notRefreshed(pkg, 'update'),
       quiet,
+      q ? robot(q.match ? 'match' : 'queued') : unqueued,
+      q ? 'queued for an update' : '',
     );
+  // Failed: only why ("patch"), the column saying the rest.
   if (pkg.updateFailure) {
     const because = FAILED_BECAUSE[pkg.update?.failedBecause];
-    return button('missing', because ? `failed: ${because.short}` : 'failure reported');
+    return button(
+      'missing',
+      html`<span class="sr-only">failed: </span>${because ? because.short : 'failure'}`,
+      false,
+      robot(''),
+    );
   }
   // The bot's last attempt failed, but nixpkgs has moved on since: not a
   // failure anymore, though the next attempt may well break the same way.
   if (pkg.update?.outcome === 'superseded') return button('neutral', 'superseded', true);
   // A newer version the bot has no way to update to: not a failure, but it
   // needs a manual update (or an updateScript).
-  if (pkg.update?.outcome === 'cantUpdate') return button('caution', "can't update");
+  if (pkg.update?.outcome === 'cantUpdate')
+    return button('caution', "can't update", false, robot('queued'));
   // The bot passes it over on purpose (opted out, GNOME's release cycle, too
   // many rebuilds, ...): not a failure, but it won't update it either.
   if (pkg.update?.outcome === 'skipped') return button('neutral', 'skipped', true);
   // With every package, only the lists' packages' logs are read (with no
   // attempt read before).
   if (pkg.unread?.includes('update') && !pkg.update) return button('neutral', 'not read', true);
-  if (pkg.update === null && pkg.unversioned)
-    return html`<span class="failure-na" title="${UNVERSIONED_TITLE}: nothing for nixpkgs-update to update">—</span>`;
   // Nothing reported, and the bot is set to update it: when, in green.
   const due = botDueText(pkg);
   if (due)
@@ -3313,11 +3809,31 @@ function updateStatus(pkg) {
       'update',
       'ok',
       html`<span class="bot-due">${due}</span>`,
-      `${queuedState(pkg).title.replace(/\. When: the update panel$/, '')}, expected by ${pkg.queued.by}`,
+      `${q.title.replace(/\. When: the update panel$/, '')}, expected by ${pkg.queued.by}`,
       notRefreshed(pkg, 'update'),
+      false,
+      robot('match'),
     );
   if (pkg.update === null) return button('neutral', 'not attempted', true);
   return button('ok', 'none reported', true);
+}
+
+// A "—" with nothing to open, saying why on hover; unless the bot is set
+// to update it anyway: then the robot and "—", one button opening the
+// update panel, as the other cells.
+function queuedOrDash(pkg, why) {
+  const q = queuedState(pkg);
+  if (!q) return html`<span class="failure-na" title="${why}">—</span>`;
+  return failureButton(
+    'update',
+    'neutral',
+    'none reported',
+    `${why}. ${q.title.replace(/\. When: the update panel$/, '')}`,
+    notRefreshed(pkg, 'update'),
+    true,
+    botMark(q.match ? 'match' : 'queued'),
+    'queued for an update',
+  );
 }
 
 // Why the bot's attempt failed ("failedBecause"), as the log says: short in
@@ -3340,10 +3856,16 @@ const FAILED_BECAUSE = {
     text: "the bot couldn't work out a hash: of vendored dependencies, mostly, which failed to fetch or build",
   },
   source: { short: 'source', text: "the new version's source couldn't be fetched" },
-  updateScript: { short: 'updateScript', text: "the package's updateScript failed" },
+  // restates: its text only says the pill again ("Failed: updateScript"),
+  // so the panel leaves it out (the log lines say the rest).
+  updateScript: {
+    short: 'updateScript',
+    text: "the package's updateScript failed",
+    restates: true,
+  },
   tests: { short: 'tests', text: 'the new version built, but its tests failed' },
   noLog: { short: 'build', text: 'the build failed, and nix kept no log of why' },
-  build: { short: 'build', text: 'the new version failed to build' },
+  build: { short: 'build', text: 'the new version failed to build', restates: true },
   request: {
     short: 'request',
     text: "a request of the bot's failed (to GitHub, mostly), not the package",
@@ -3592,7 +4114,11 @@ function fillUpdate(pkg, el) {
       <span class="pd-verdict ${tone}">${o.label(u)}</span>
       <dl class="pd-facts">${facts.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
     </div>
-    <p class="pd-text">${String(text).charAt(0).toUpperCase()}${raw(String(text).slice(1))}.</p>${
+    ${
+      because?.restates
+        ? ''
+        : html`<p class="pd-text">${String(text).charAt(0).toUpperCase()}${raw(String(text).slice(1))}.</p>`
+    }${
       because?.report
         ? Date.now() - new Date(day).getTime() <= REPORT_DAYS * DAY_MS
           ? html`<p class="pd-text">Worth telling <a class="files-link" href="https://github.com/NixOS/nixpkgs-update/issues" target="_blank" rel="noopener">nixpkgs-update's maintainers ↗</a>, if no one has yet.</p>`
@@ -3646,14 +4172,27 @@ function blockedByHtml(blockers) {
 
 // One system's build in the builds panel: where, its status, when it last
 // built, and what to open (the log, the job, the build, the source).
-function buildLine(pkg, b) {
+// alike: how many builds fail as this one does, and whether this line shows
+// their log's lines (the last of them: groupedBuilds); the others have their
+// Log link instead.
+function buildLine(pkg, b, alike = { n: 1, shows: true }) {
   const s = BUILD_STATUS[b.status] || BUILD_STATUS.unknown;
   const multi = (pkg.attrs || []).length > 1;
   // The versions only when they differ: the same version means something else
   // broke it (a dependency, the toolchain), not the update.
   const versionsDiffer = b.version && b.lastSuccessVersion && b.version !== b.lastSuccessVersion;
+  // Failing at another version than it last built at: since that update.
+  // Its PR when nixkeeper knows it (prs_digest.build_fix_prs), else a
+  // search for it.
+  const cause = pkg.buildCausePR;
+  const updatePR =
+    cause && cause.title.endsWith(b.version)
+      ? html` (<a class="files-link gh-item merged" href="${safeUrl(cause.url)}" target="_blank" rel="noopener" title="${cause.title}">${GH_ICONS.merged}<span class="sr-only">PR </span>#${cause.number} ↗</a>)`
+      : html` (<a class="files-link" href="https://github.com/NixOS/nixpkgs/pulls?q=${encodeURIComponent(`is:pr is:merged in:title "${(b.attr || pkg.name).split('.').pop()}" "${b.version}"`)}" target="_blank" rel="noopener" title="Search nixpkgs' merged PRs for this update">its PR ↗</a>)`;
   const at =
-    versionsDiffer && b.status === 'failed' ? html` at <span class="mono">${b.version}</span>` : '';
+    versionsDiffer && b.status === 'failed'
+      ? html` at <span class="mono">${b.version}</span>, since its update${updatePR}`
+      : '';
   let lastGood = '';
   if (versionsDiffer) {
     const v = b.lastSuccessVersion;
@@ -3664,22 +4203,23 @@ function buildLine(pkg, b) {
   const since =
     'lastSuccess' in b
       ? b.lastSuccess
-        ? html`last built${lastGood} ${longDate(b.lastSuccess)} <span class="pd-ago">(${shortAge(b.lastSuccess)} ago)</span>`
+        ? html`last built${lastGood} <span title="${longDate(b.lastSuccess)}">${shortAge(b.lastSuccess)} ago</span>`
         : 'never built successfully'
       : '';
-  // Why it failed, from its log (nixkeeper-hydra), and the lines that say so.
+  // Why it failed, from its log (nixkeeper-hydra), and the lines that say so:
+  // in the status badge itself ("failed: missing file", as the list's cell
+  // says it), not beside it.
   const why = b.status === 'failed' && BUILD_FAILED[b.failedBecause];
-  const because = why
-    ? html`<span class="br-why" title="${why.text}">${why.short}</span>${at || since ? ' · ' : ''}`
-    : '';
   const what =
     b.status === 'dependency' && b.blockedBy?.length
       ? html`${blockedByHtml(b.blockedBy)}${since ? html` · ${since}` : ''}`
-      : html`${because}${at}${at && since ? ' · ' : ''}${since}`;
+      : html`${at}${at && since ? ' · ' : ''}${since}`;
   const act = (href, name, label, title) =>
     html`<a class="pd-link" href="${href}" target="_blank" rel="noopener"${title ? html` title="${title}"` : ''}>${icon(name)}${label}</a>`;
+  const excerpt = why && b.failedExcerpt && alike.shows;
   const acts = [
-    b.status === 'failed' && act(`${HYDRA}/build/${b.build}/log`, 'file-text', 'Log'),
+    // With the log's lines shown, their own link ("full log") instead.
+    b.status === 'failed' && !excerpt && act(`${HYDRA}/build/${b.build}/log`, 'file-text', 'Log'),
     // A failed build's page too: every step, when the failure is in a
     // derivation built for it rather than the package's own step.
     ['failed', 'dependency', 'unfinished'].includes(b.status) &&
@@ -3696,13 +4236,43 @@ function buildLine(pkg, b) {
         `Hydra job ${b.attr}.${b.system}: every build of it`,
       ),
   ].filter(Boolean);
-  return html`<div class="br">
-    <span class="br-sys"><span class="status-dot ${s.dot}" aria-hidden="true"></span><span class="mono">${b.system}</span>${multi ? html`<span class="mono br-attr">${b.attr}</span>` : ''}</span>
-    <span class="br-st ${s.dot}" title="${s.text}">${s.short}</span>
+  return html`<div class="br${alike.n > 1 && !alike.shows ? ' alike' : ''}">
+    <span class="br-sys"><span class="mono">${b.system}</span>${multi ? html`<span class="mono br-attr">${b.attr}</span>` : ''}</span>
+    <span class="br-st ${s.dot}" title="${why ? `${s.text}: ${why.text}` : s.text}">${why ? html`<span class="sr-only">${s.short}: </span>${why.short}` : s.short}</span>
     <span class="br-what">${what}</span>
     <span class="br-acts">${acts}</span>
-    ${why && b.failedExcerpt ? html`<pre class="br-log" title="From the build's log on Hydra">${b.failedExcerpt}</pre>` : ''}
+    ${excerpt ? html`<div class="br-log-wrap"><pre class="br-log" title="From the build's log on Hydra">${b.failedExcerpt}</pre><span class="br-log-foot"><a class="files-link br-full-log" href="${HYDRA}/build/${b.build}/log" target="_blank" rel="noopener">full log ↗</a>${alike.n > 1 ? ` · the same on ${alike.n === 2 ? 'both' : `all ${alike.n}`}` : ''}</span></div>` : ''}
   </div>`;
+}
+
+// A failure's log lines as compared between builds: without what changes
+// from one run to the next (pytest's timings, its "=" padding around them).
+const sameFailure = (b) =>
+  `${b.failedBecause}\n${(b.failedExcerpt || '')
+    .replace(/ in [\d.]+s( \(\d+:\d\d:\d\d\))?/g, '')
+    .replace(/=+/g, '=')
+    .replace(/\s+/g, ' ')}`;
+
+// The builds in their order, those failing alike (same reason, same log
+// lines: python313Packages and python314Packages, on two platforms) brought
+// together where the first of them is, each with its alike for buildLine:
+// their lines shown once, under the last.
+function groupedBuilds(builds) {
+  const key = (b) => (b.status === 'failed' && b.failedExcerpt ? sameFailure(b) : null);
+  const groups = new Map();
+  for (const b of builds) if (key(b)) groups.set(key(b), [...(groups.get(key(b)) || []), b]);
+  const out = [];
+  for (const b of builds) {
+    const k = key(b);
+    if (!k) out.push([b, { n: 1, shows: true }]);
+    else if (groups.get(k)[0] === b) {
+      const all = groups.get(k);
+      all.forEach((x, i) => {
+        out.push([x, { n: all.length, shows: i === all.length - 1 }]);
+      });
+    }
+  }
+  return out;
 }
 
 function fillBuilds(pkg, el) {
@@ -3726,47 +4296,22 @@ function fillBuilds(pkg, el) {
     el.innerHTML = html`${stale}${none('Not built', html`Hydra doesn't build this package (nixpkgs may exclude it with <span class="mono">hydraPlatforms</span>).`)}`;
     return;
   }
-  const built = pkg.builds.filter((b) => b.status !== 'notBuilt');
-  const failed = built.filter((b) => b.status === 'failed').length;
-  const stopped = built.filter((b) => ['broken', 'dependency', 'unfinished'].includes(b.status));
-  // All stopped by a dependency: "blocked", as the list calls it.
-  const blocked = stopped.length && stopped.every((b) => b.status === 'dependency');
-  const verdict = failed
-    ? ['danger', `Failing on ${failed} of ${built.length}`]
-    : stopped.length
-      ? [
-          'caution',
-          `${blocked ? 'Blocked' : 'Not building'} on ${stopped.length} of ${built.length}`,
-        ]
-      : built.length
-        ? ['ok', built.length === 1 ? 'Building' : `Building on all ${built.length}`]
-        : ['neutral', 'Not built'];
-  // Builds with nothing going on are checked every few days, not daily
-  // (nixkeeper/sources/hydra.py): when the oldest was, if it isn't today.
+  // Each platform's line says how it stands: no summary above them (a
+  // count the lines show at a glance). Builds with nothing going on are
+  // checked every few days, not daily (nixkeeper/sources/hydra.py): when
+  // the oldest was, under them, if it isn't today.
   const checked = pkg.builds
     .map((b) => b.checkedAt)
     .filter(Boolean)
     .sort()[0];
   const age = checked && daysText(checked);
-  const facts = [
-    [
-      'jobset',
-      html`<a class="files-link mono" href="${HYDRA}/jobset/nixpkgs/unstable" target="_blank" rel="noopener" title="Hydra's builds of nixpkgs master">nixpkgs/unstable</a>`,
-    ],
-    checked &&
-      age !== 'today' && [
-        'checked',
-        html`<span title="${new Date(checked).toLocaleString()}">${age} ago</span>`,
-      ],
-  ].filter(Boolean);
-  const darwin = pkg.platforms === null || pkg.platforms?.darwin;
   el.innerHTML = html`${stale}<div class="pd">
-    <div class="pd-head">
-      <span class="pd-verdict ${verdict[0]}">${verdict[1]}</span>
-      <dl class="pd-facts">${facts.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
-    </div>
-    <div class="br-list">${pkg.builds.map((b) => buildLine(pkg, b))}</div>
-    ${darwin ? html`<p class="pd-foot">x86_64-darwin is no longer built by nixpkgs.</p>` : ''}
+    <div class="br-list">${groupedBuilds(pkg.builds).map(([b, alike]) => buildLine(pkg, b, alike))}</div>
+    ${
+      checked && age !== 'today'
+        ? html`<p class="pd-foot" title="${new Date(checked).toLocaleString()}">Checked on Hydra ${age} ago.</p>`
+        : ''
+    }
   </div>`;
 }
 
@@ -3816,19 +4361,34 @@ function platformTags(pkg) {
   return tags.length ? html`<span class="plats">${tags}</span>` : '';
 }
 
-// Open nixpkgs PRs / issues with the package's attribute name in the title. Counts come from
-// the fetch script's GitHub search; without them the buttons are plain links.
+// Open nixpkgs PRs / issues with the package's attribute name in the title:
+// a link to GitHub's search for each kind that has some, with its count.
+// None of either: a faint "—", as the other columns say nothing to report
+// (two thirds of the attention list had "PRs 0 issues 0", two links to an
+// empty search, 2026-10-23). Not counted (an instance whose sync doesn't
+// ask GitHub): both, as plain links.
 function githubLinks(pkg) {
   const term = pkg.searchTerm || pkg.name;
   // Packages with none open are counted every few days, not daily
   // (nixkeeper/sources/github.py): when, if it wasn't today.
   const age = pkg.countedAt && daysText(pkg.countedAt);
   const counted = age && age !== 'today' ? ` (counted ${age} ago)` : '';
+  // GitHub's icon and the count ("2 open PRs" said); without a count, the
+  // word instead.
+  // The count is of titles about the package (nixkeeper/sources/
+  // github_bulk.py); GitHub's search, linked, matches words, and for a name
+  // that's a word (pkg, linux) shows more: the hover says so.
   const link = (kind, path, label, count) => {
-    const q = encodeURIComponent(`is:${kind} state:open in:title ${term}`);
+    if (count === 0) return '';
+    const q = encodeURIComponent(`is:${kind} state:open in:title "${term}"`);
+    const more = pkg.searchShowsMore?.includes(kind)
+      ? `. GitHub's search shows more: titles with the word ${term} in them, not only its name`
+      : '';
     return html`<a class="gh-btn" href="https://github.com/NixOS/nixpkgs/${path}?q=${q}" target="_blank" rel="noopener"
-      title="Open nixpkgs ${label} with ${term} in the title${counted}"${count === 0 ? raw(' data-zero') : ''}>${label}${count != null ? html` <b>${count}</b>` : ''}</a>`;
+      title="Open nixpkgs ${label} naming ${term} in their title${counted}${more}"${count != null ? html` aria-label="${count} open ${label}"` : ''}>${GH_ICONS[kind]}${count != null ? html`<b>${count}</b>` : label}</a>`;
   };
+  if (pkg.openPRs === 0 && pkg.openIssues === 0)
+    return html`<span class="failure-na" title="No open nixpkgs PRs or issues naming ${term} in their title${counted}${pkg.searchShowsMore ? `. GitHub's search shows some with the word ${term} in them` : ''}">—</span>`;
   return html`<span class="gh-links">${link('pr', 'pulls', 'PRs', pkg.openPRs)}${link('issue', 'issues', 'issues', pkg.openIssues)}</span>`;
 }
 
@@ -3844,23 +4404,30 @@ const whoDid = (author, mergedBy) => {
 // eligibility, state, bot blocking and duplicates; open PRs touching it
 // while its build fails on Hydra; and its issues checked against Hydra and
 // nixpkgs now. Nothing when there's none.
+// Each: [the pill's few words, the sentence its hover says].
 const PR_STATES = {
-  superseded: (now) => `superseded: nixpkgs has ${now} already`,
-  overtaken: (now) => `overtaken: nixpkgs moved to ${now}, a rebase needed`,
-  downgrade: () => 'a downgrade',
-  snapshotToRelease: () => 'from a snapshot back to a release',
-  preRelease: () => 'to a pre-release, by its suffix',
+  superseded: (now) => [`superseded (${now})`, `Superseded: nixpkgs has ${now} already`],
+  overtaken: (now) => [
+    `needs a rebase (${now})`,
+    `Overtaken: nixpkgs moved to ${now}, a rebase is needed`,
+  ],
+  downgrade: () => ['a downgrade', 'It would downgrade the package'],
+  snapshotToRelease: () => ['back to a release', 'From a snapshot back to a release'],
+  preRelease: () => ['a pre-release', 'To a pre-release, by its version suffix'],
 };
 function githubSection(pkg) {
-  const link = (item) =>
-    html`<a class="files-link" href="${safeUrl(item.url)}" target="_blank" rel="noopener">#${item.number} ↗</a>`;
+  // Each PR and issue with GitHub's icon for it: open, draft, merged, issue.
+  const link = (item, kind = item.draft ? 'draft' : 'pr', who = '') =>
+    html`<a class="files-link gh-item ${kind}" href="${safeUrl(item.url)}" target="_blank" rel="noopener"${who ? html` title="${who[0].toUpperCase()}${who.slice(1)}"` : ''}>${GH_ICONS[kind]}<span class="sr-only">${kind === 'issue' ? 'issue' : kind === 'merged' ? 'merged PR' : kind === 'draft' ? 'draft PR' : 'PR'} </span>#${item.number} ↗</a>`;
+  // A pill of a few words; the sentence behind them on hover, and for
+  // screen readers (they were whole sentences, in the pill, 2026-10-23).
   const fact = (kind, text, title) =>
-    html`<span class="gh-fact ${kind}"${title ? html` title="${title}"` : ''}>${text}</span>`;
+    html`<span class="gh-fact ${kind}"${title ? html` title="${title}"` : ''}>${text}${title ? html`<span class="sr-only">: ${title}</span>` : ''}</span>`;
   const lines = [];
   // Marked broken with open PRs: one may fix it, or be moot now.
   if (pkg.markedBroken && pkg.openPRs > 0)
     lines.push(
-      html`<li>${fact('warn', `marked broken, and ${pkg.openPRs === 1 ? 'an open PR touches' : `${fmt(pkg.openPRs)} open PRs touch`} it`, 'One may fix it, or be moot while it stays broken: worth a look before reviewing it')}</li>`,
+      html`<li>${fact('warn', `broken · ${fmt(pkg.openPRs)} open PR${pkg.openPRs === 1 ? '' : 's'}`, `Marked broken, and ${pkg.openPRs === 1 ? 'an open PR touches' : `${fmt(pkg.openPRs)} open PRs touch`} it: one may fix it, or be moot while it stays broken; worth a look before reviewing it`)}</li>`,
     );
   const pr = pkg.openPR;
   const f = pr?.facts;
@@ -3869,14 +4436,14 @@ function githubSection(pkg) {
       f.fixesBuild &&
         fact(
           '',
-          'touches its failing build',
+          'may fix the build',
           'It changes the package while its build fails on Hydra: maybe its fix',
         ),
       f.mergeBot === 'ready' &&
         fact(
           'ok',
-          'ready for the merge bot',
-          'CI green, no conflict: a maintainer of the package can merge it by commenting @NixOS/nixpkgs-merge-bot merge',
+          'merge-bot ready',
+          'Ready for the merge bot: CI green, no conflict; a maintainer of the package can merge it by commenting @NixOS/nixpkgs-merge-bot merge',
         ),
       f.mergeBot === 'eligible' &&
         fact(
@@ -3884,24 +4451,18 @@ function githubSection(pkg) {
           'merge-bot eligible',
           'The merge bot could merge it once CI is green and any conflict is sorted out',
         ),
-      f.state && fact('warn', (PR_STATES[f.state] || (() => f.state))(f.now || '?')),
+      f.state && fact('warn', ...(PR_STATES[f.state] || (() => [f.state]))(f.now || '?')),
       f.behind &&
         fact(
           'warn',
-          `behind: upstream has ${f.behind}`,
-          'Merged as it is, the package would still be outdated: worth updating the PR first',
-        ),
-      f.vulnerable &&
-        fact(
-          'warn',
-          'for a vulnerable package',
-          'The package counts as vulnerable (see its vulnerabilities): worth reviewing this PR first, and checking whether its version fixes them',
+          `behind (${f.behind})`,
+          `Behind: upstream has ${f.behind}. Merged as it is, the package would still be outdated: worth updating the PR first`,
         ),
       f.blocksBot &&
         fact(
           'warn',
-          `blocks the update bot${typeof f.blocksBot === 'string' ? ` (its next try ~${shortDay(f.blocksBot)})` : ''}`,
-          'It has the very title nixpkgs-update would use, so the bot skips this update while it is open',
+          'blocks the bot',
+          `Blocks the update bot${typeof f.blocksBot === 'string' ? ` (its next try ~${shortDay(f.blocksBot)})` : ''}: it has the very title nixpkgs-update would use, so the bot skips this update while it is open`,
         ),
       f.duplicates?.length &&
         html`<span class="gh-fact">also open: ${f.duplicates.map((n, i) => html`${i ? ' ' : ''}<a class="files-link" href="https://github.com/NixOS/nixpkgs/pull/${n}" target="_blank" rel="noopener">#${n}</a>`)}</span>`,
@@ -3909,6 +4470,24 @@ function githubSection(pkg) {
     if (said.length)
       lines.push(html`<li>Update PR ${link(pr)} <span class="mono">${pr.to}</span>: ${said}</li>`);
   }
+  // Open update PRs nixpkgs is already past (prs_digest.mark_superseded).
+  // And init PRs for it, added another way while they waited.
+  for (const sp of pkg.supersededPRs || [])
+    lines.push(
+      html`<li>${link({ ...sp, url: `https://github.com/NixOS/nixpkgs/pull/${sp.number}` })} ${sp.title} ${
+        sp.init
+          ? fact(
+              'warn',
+              'can be closed (in nixpkgs)',
+              `nixpkgs has it now (${sp.now}), added another way while this PR waited: the PR can be closed`,
+            )
+          : fact(
+              'warn',
+              `can be closed (${sp.now})`,
+              `nixpkgs has ${sp.now}, this version or a newer one: the PR can be closed, or updated to the newest`,
+            )
+      }</li>`,
+    );
   // Its other open PRs, a removal first (prs_digest.add_facts).
   const KIND = {
     drop: (other) => {
@@ -3919,53 +4498,77 @@ function githubSection(pkg) {
       return other.proposed
         ? fact(
             '',
-            `removal proposed (${other.proposed})`,
-            `This PR would remove ${what} from nixpkgs, but it doesn't look likely to be merged as it is`,
+            'removal proposed',
+            `This PR would remove ${what} from nixpkgs (${other.proposed}), but it doesn't look likely to be merged as it is`,
           )
-        : fact('warn', `removes ${what} from nixpkgs`);
+        : fact('warn', 'removes it', `It removes ${what} from nixpkgs`);
     },
     init: () => fact('', 'adds it'),
     update: () => fact('', 'an update'),
   };
-  for (const other of pkg.otherPRs || [])
+  const closing = new Set((pkg.supersededPRs || []).map((sp) => sp.number));
+  for (const other of (pkg.otherPRs || []).filter((o) => !closing.has(o.number)))
     lines.push(
       html`<li>${link({ ...other, url: `https://github.com/NixOS/nixpkgs/pull/${other.number}` })} ${other.title} ${other.kind ? KIND[other.kind]?.(other) || '' : ''}${
         other.mergeBot === 'ready'
-          ? fact('ok', 'ready for the merge bot')
+          ? fact('ok', 'merge-bot ready', 'Ready for the merge bot: CI green, no conflict')
           : other.mergeBot === 'eligible'
             ? fact('', 'merge-bot eligible')
             : ''
       }</li>`,
+    );
+  // The update its build began failing with (prs_digest.build_fix_prs).
+  const bc = pkg.buildCausePR;
+  if (bc)
+    lines.push(
+      html`<li>${link(bc, 'merged', [bc.author && `by @${bc.author}`, bc.mergedBy && `merged by @${bc.mergedBy}`].filter(Boolean).join(', '))} ${bc.title} ${fact('warn', 'likely broke the build', 'Its build has failed since this update, at the version it updated to: likely what broke it')}</li>`,
     );
   // A PR merged since its build began failing that touched it: likely the
   // fix, once Hydra builds it (prs_digest.build_fix_prs).
   const bf = pkg.buildFixPR;
   if (bf)
     lines.push(
-      html`<li>${link(bf)} ${bf.title} ${fact('ok', 'merged since its build began failing: likely its fix', "Hydra hasn't built it yet, or the failure was elsewhere")}${bf.author ? html` by <a class="files-link" href="https://github.com/${encodeURIComponent(bf.author)}" target="_blank" rel="noopener">@${bf.author}</a>` : ''}${bf.mergedBy ? html`, merged by <a class="files-link" href="https://github.com/${encodeURIComponent(bf.mergedBy)}" target="_blank" rel="noopener">@${bf.mergedBy}</a>` : ''}</li>`,
+      // Who wrote and merged it on the link's hover, not the line: the icon
+      // says merged, and no other line here names people.
+      html`<li>${link(bf, 'merged', [bf.author && `by @${bf.author}`, bf.mergedBy && `merged by @${bf.mergedBy}`].filter(Boolean).join(', '))} ${bf.title} ${fact('ok', 'likely fix', "Merged since its build began failing: likely its fix, which Hydra hasn't built yet (or the failure was elsewhere)")}</li>`,
     );
   for (const fix of pkg.fixPRs || [])
     lines.push(
-      html`<li>${link(fix)} ${fix.title} ${fact('', 'touches it while its build fails on Hydra', 'Maybe its fix')}</li>`,
+      html`<li>${link(fix)} ${fix.title} ${fact('', 'may fix the build', 'It touches the package while its build fails on Hydra: maybe its fix')}</li>`,
     );
   const ISSUE = {
     builds: (c) =>
       c.condition
-        ? fact('warn', 'builds on Hydra now, but the title adds a condition to check')
-        : fact('ok', 'builds on Hydra now: a candidate to close'),
-    failing: () => fact('', 'still failing on Hydra'),
-    done: (c) => fact('ok', `nixpkgs has ${c.now || 'it'}: a candidate to close`),
+        ? fact(
+            'warn',
+            'builds now · check it',
+            'It builds on Hydra now, but the title adds a condition to check',
+          )
+        : fact('ok', 'builds now · can close', 'It builds on Hydra now: a candidate to close'),
+    failing: () => fact('', 'still failing', 'Still failing on Hydra'),
+    done: (c) =>
+      fact(
+        'ok',
+        `done${c.now ? ` (${c.now})` : ''} · can close`,
+        `nixpkgs has ${c.now || 'it'}: a candidate to close`,
+      ),
     partly: (c) =>
-      fact('warn', `nixpkgs moved to ${c.now || 'a newer version'}, not to the one asked`),
+      fact(
+        'warn',
+        `partly done${c.now ? ` (${c.now})` : ''}`,
+        `nixpkgs moved to ${c.now || 'a newer version'}, not to the one asked`,
+      ),
     cveFixed: (c) =>
       fact(
         'ok',
-        `${c.cves?.length > 1 ? 'none of its CVEs affect' : "its CVE doesn't affect"} nixpkgs' version: a candidate to close`,
-        `${(c.cves || []).join(', ')}: fixed or patched, as nixkeeper reads the security tracker and OSV against nixpkgs' version. Check before closing`,
+        `CVE${c.cves?.length > 1 ? 's' : ''} fixed · can close`,
+        `${(c.cves || []).join(', ')}: ${c.cves?.length > 1 ? "none affect nixpkgs' version" : "it doesn't affect nixpkgs' version"}, as nixkeeper reads the security tracker and OSV: a candidate to close. Check before closing`,
       ),
   };
   for (const c of pkg.issueChecks || [])
-    lines.push(html`<li>${link(c)} ${c.title} ${(ISSUE[c.verdict] || (() => c.verdict))(c)}</li>`);
+    lines.push(
+      html`<li>${link(c, 'issue')} ${c.title} ${(ISSUE[c.verdict] || (() => c.verdict))(c)}</li>`,
+    );
   return lines.length
     ? html`<section class="pd-sec"><h4 class="other-label">On GitHub</h4><ul class="gh-checks">${lines}</ul></section>`
     : '';
@@ -4015,17 +4618,6 @@ const icon = (name) =>
   raw(
     `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`,
   );
-// Whether the package panel shows its explanation ("Why?"): remembered in
-// this browser, closed by default.
-const WHY_KEY = 'nixkeeper.panelWhy';
-function whyOpen() {
-  try {
-    return localStorage.getItem(WHY_KEY) === 'open';
-  } catch {
-    return false;
-  }
-}
-
 // entries: the row's Repology entries, or null if they couldn't be loaded
 // (its shard).
 function fillDetail(pkg, el, entries) {
@@ -4046,6 +4638,25 @@ function fillDetail(pkg, el, entries) {
     repologyDays && repologyDays !== 'today'
       ? html` <span class="since" title="${new Date(pkg.repologyCheckedAt).toLocaleString()}">· ${repologyDays} ago</span>`
       : '';
+  // Repology's page of the package, and how old its data is, in the
+  // sentence: "compared with 14 other repositories (5 days ago)".
+  const repologyUrl = pkg.project
+    ? `https://repology.org/project/${encodeURIComponent(pkg.project)}/versions`
+    : null;
+  const repologyLink = (text) =>
+    repologyUrl
+      ? html`<a class="files-link" href="${repologyUrl}" target="_blank" rel="noopener">${text}</a>`
+      : text;
+  const repologyWhen =
+    repologyDays && repologyDays !== 'today'
+      ? html` <span title="${new Date(pkg.repologyCheckedAt).toLocaleString()}">(${repologyDays} ago)</span>`
+      : '';
+  // The sentence after the verdict, without "nixpkgs unstable has 1.3.5"
+  // (the row says the version): what came after it, as a sentence of its own.
+  const opening = (tail) => {
+    const text = String(tail).replace(/^\s*(—|,|;)\s*/, '');
+    return raw(/^[a-z]/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text);
+  };
   const homepage = safeUrl(pkg.homepage);
 
   const st = computeStatus(pkg);
@@ -4087,6 +4698,8 @@ function fillDetail(pkg, el, entries) {
     : '';
   // What Repology said, where the update check decided otherwise
   // (repologySaid, upstream.apply in nixkeeper).
+  // Its update check decides too when only nixpkgs packages it: Repology
+  // compared it with nothing (nothingCompared without the check).
   const said = pkg.repologySaid;
   const repologyOutdated = (said?.status ?? pkg.nixStatus) === 'outdated';
   // A branch check (unstable versions): how many commits nixpkgs is behind,
@@ -4108,18 +4721,24 @@ function fillDetail(pkg, el, entries) {
     : '';
   // When the update check is what makes it outdated, say where the newer
   // version came from, and how it compares with Repology.
-  const upstreamLine = () =>
+  // Outdated by nixkeeper's update check (the head says what it found, its
+  // badge links where): how Repology differs, or what it is when it follows
+  // another package.
+  // Only nixpkgs packages it: its update check is what decided (the source
+  // badge), nothing else for it to agree with.
+  const nothingElse = pkg.onlyNixpkgs && pkg.nixStatus === 'unique';
+  const upstreamExtra = () =>
     follows
-      ? html`nixpkgs unstable has <span class="mono" style="font-weight:600">${pkg.nixVersion}</span>, behind <span class="mono" style="font-weight:600;color:var(--warn)">${up.version}</span>: it's ${follows}${since}.`
-      : html`nixpkgs unstable has <span class="mono" style="font-weight:600">${pkg.nixVersion}</span>; ${communityCheck(pkg) ? 'a community update check' : ours} found <span class="mono" style="font-weight:600;color:var(--warn)">${up.version}</span> ${upLink}${
-          pkg.refVersion !== up.version
-            ? html`; Repology's newest is <span class="mono">${pkg.refVersion}</span>`
-            : repologyOutdated
-              ? ''
-              : up.commit
-                ? ` (${behind || 'newer commits'}; Repology only tracks releases, so it can't tell)`
-                : ", which Repology doesn't count as newest yet"
-        }${since}`;
+      ? html`It's ${follows}.`
+      : pkg.refVersion && pkg.refVersion !== up.version
+        ? targetVersion(pkg) && targetVersion(pkg) !== up.version
+          ? html`The newest above is Repology's; ${ours} found <span class="mono">${up.version}</span>.`
+          : html`Repology's newest is <span class="mono">${pkg.refVersion}</span>.`
+        : repologyOutdated
+          ? ''
+          : up.commit
+            ? `${behind ? `${behind.charAt(0).toUpperCase()}${behind.slice(1)}` : 'Newer commits'}: Repology only tracks releases, so it can't tell.`
+            : "Repology doesn't count it as the newest yet.";
   // A check that can't refresh needs fixing in nixkeeper, so the details say
   // so plainly, with the last result it's still using.
   const failing = notRefreshed(pkg, 'upstream');
@@ -4164,50 +4783,58 @@ function fillDetail(pkg, el, entries) {
       : feed?.dated && builtOn(feed.version)
         ? ` (a build from ${builtOn(feed.version)}${st === 'warn' && builtOn(pkg.nixVersion) ? `; nixpkgs' is from ${builtOn(pkg.nixVersion)}` : ''})`
         : '';
+  // What the head (verdict, newest, since when, the linked source) doesn't
+  // say already: how Repology differs from the check that decided, why a
+  // version isn't compared, a rule's reason; nothing when the head says it
+  // all (outdated by Repology: its newest and since when).
   const nixLine =
     up?.newer && !fromMaster(pkg)
-      ? upstreamLine()
+      ? upstreamExtra()
       : st === 'missing'
-        ? html`Not found in <span class="mono">nix_unstable</span> — nixpkgs doesn't currently package this.`
-        : html`nixpkgs unstable has <span class="mono" style="font-weight:600">${pkg.nixVersion}</span>${
-            rule
-              ? ruleText
-              : feed && st === 'warn' && !fromMaster(pkg)
-                ? html`, the newest on ${feedLink} is <span class="mono" style="font-weight:600;color:var(--warn)">${pkg.refVersion}</span>${feedDay}${since}`
-                : feed && st === 'ok'
-                  ? html` — the newest on ${feedLink}${feedDay}.${feed.heldBack ? html` Hackage has <span class="mono">${feed.heldBack}</span>, which Stackage holds back until its next series.` : ''}`
-                  : st === 'warn' && fromMaster(pkg)
-                    ? ` — the newest Repology and the update checks know of, but master already has a newer one${since.replace(' — ', '; ')}:`
-                    : st === 'warn'
-                      ? pkg.refFromPR
-                        ? html`; Repology names no newer version, but an update PR brings <span class="mono" style="font-weight:600;color:var(--warn)">${pkg.refVersion}</span>${since}`
-                        : html`, the newest seen elsewhere is <span class="mono" style="font-weight:600;color:var(--warn)">${pkg.refVersion || '?'}</span>${since}`
-                      : olderVersionKept(pkg)
-                        ? html` — an older version nixpkgs keeps on purpose${pkg.keptBeside ? html`, beside <b class="mono">${pkg.keptBeside.attr}</b> <span class="mono">${pkg.keptBeside.version}</span>` : ', beside a newer one'}: not outdated while nothing newer is out in its own series.`
-                        : st === 'neutral'
-                          ? pkg.nixStatus === 'unsupported'
+        ? html`Not found in <span class="mono">nix_unstable</span>: nixpkgs doesn't currently package this.`
+        : opening(
+            html`${
+              rule
+                ? ruleText
+                : feed && st === 'ok' && feed.heldBack
+                  ? html` Hackage has <span class="mono">${feed.heldBack}</span>, which Stackage holds back until its next series.`
+                  : st === 'warn'
+                    ? pkg.refFromPR && !fromMaster(pkg)
+                      ? ' — Repology names no newer version: the newest comes from an update PR.'
+                      : pkg.keptBeside
+                        ? html` — an older series nixpkgs keeps on purpose, beside <b class="mono">${pkg.keptBeside.attr}</b> <span class="mono">${pkg.keptBeside.version}</span>; behind in its own: the newest above is its series'.`
+                        : ''
+                    : olderVersionKept(pkg)
+                      ? html` — an older version nixpkgs keeps on purpose${pkg.keptBeside ? html`, beside <b class="mono">${pkg.keptBeside.attr}</b> <span class="mono">${pkg.keptBeside.version}</span>` : ', beside a newer one'}: not outdated while nothing newer is out in its own series.`
+                      : st === 'neutral'
+                        ? nothingCompared(pkg)
+                          ? ` — ${ONLY_NIXPKGS_TEXT}.`
+                          : pkg.nixStatus === 'unsupported'
                             ? ` — ${UNSUPPORTED_TEXT}.`
                             : pkg.nixStatus === 'unlisted'
                               ? pkg.lookupFailed
                                 ? ` — ${LOOKUP_FAILED}, so there's nothing to compare it with yet.`
                                 : " — Repology doesn't list this package, so there's nothing to compare it with."
                               : html` — Repology classifies this version as <span class="mono">${pkg.nixStatus}</span>.`
-                          : said && up && !failing
-                            ? ' — the newest version, by its update check.'
-                            : loaded
-                              ? ` — the newest ${pkg.devel ? 'devel ' : ''}version, compared with ${compared} other ${compared === 1 ? 'repository' : 'repositories'}.`
-                              : ` — the newest ${pkg.devel ? 'devel ' : ''}version.`
-          }${
-            up && !up.newer && !failing
-              ? follows
-                ? html` It's ${follows}.`
-                : up.behind
-                  ? html` ${ours}: ${behind} ${upLink} (up to <span class="mono">${up.version}</span>), not counted as outdated until ${limits}.`
-                  : said
-                    ? html` ${communityCheck(pkg) ? 'A community update check' : ours.replace(/^n/, 'N')} found <span class="mono">${up.version}</span> ${upLink}. Repology counts it <span class="mono">${said.status}</span>${said.newest ? html`, with <span class="mono">${said.newest}</span> as the newest elsewhere` : ''}: the update check decides, being this package's own source.`
-                    : html` ${ours} ${st === 'warn' ? 'found nothing newer' : 'agrees'}: the latest version ${upLink} is <span class="mono">${up.version}</span>.`
-              : ''
-          }`;
+                        : feed || (said && up && !failing)
+                          ? ''
+                          : loaded && compared
+                            ? html` — compared with ${repologyLink(`${compared} other ${compared === 1 ? 'repository' : 'repositories'}`)}${repologyWhen}.`
+                            : ''
+            }${
+              up && !up.newer && !failing
+                ? follows
+                  ? html` It's ${follows}.`
+                  : up.behind
+                    ? html` ${ours}: ${behind} ${upLink} (up to <span class="mono">${up.version}</span>), not counted as outdated until ${limits}.`
+                    : said
+                      ? html` Repology counts it <span class="mono">${said.status}</span>${said.newest ? html`, with <span class="mono">${said.newest}</span> as the newest elsewhere` : ''}: the update check decides, being this package's own source.`
+                      : !feed && !rule && !fromMaster(pkg) && !nothingElse
+                        ? html` ${ours} ${st === 'warn' ? 'found nothing newer' : 'agrees'}: the latest version ${upLink} is <span class="mono">${up.version}</span>.`
+                        : ''
+                : ''
+            }`,
+          );
   // Where master is: the PR that brought it, and whether Hydra built it.
   const masterSaid = [
     pkg.masterPR &&
@@ -4254,13 +4881,22 @@ function fillDetail(pkg, el, entries) {
     st === 'missing' || verdict[1] === 'Not compared'
       ? null
       : fromMaster(pkg)
-        ? ['merged', 'git-merge', 'master', "master's version, built by Hydra or merged"]
+        ? [
+            'merged',
+            'git-merge',
+            'master',
+            "master's version, built by Hydra or merged",
+            safeUrl(pkg.masterPR?.url),
+          ]
         : rule
           ? [
               'ours',
               'list-check',
               'up-to-date rule',
               `${rule.community ? 'A community' : 'Your'} up-to-date rule: ${rule.reason || ''}`,
+              rule.community
+                ? 'https://github.com/nixkeeper/nixkeeper/blob/main/community/up-to-date.nix'
+                : null,
             ]
           : feed
             ? [
@@ -4268,6 +4904,7 @@ function fillDetail(pkg, el, entries) {
                 'package',
                 feed.name,
                 `Compared with ${feed.name}, this package's own source`,
+                safeUrl(feed.url),
               ]
             : (said || up?.newer) && up.follows
               ? [
@@ -4276,21 +4913,22 @@ function fillDetail(pkg, el, entries) {
                   `with ${up.follows}`,
                   `Updated together with ${up.follows} (${communityCheck(pkg) ? 'a community rule' : 'your update checks'}): its newest version counts for this package too`,
                 ]
-              : said || up?.newer
+              : said || up?.newer || (up && pkg.onlyNixpkgs && pkg.nixStatus === 'unique')
                 ? [
                     'ours',
                     up.commit ? 'git-branch' : up.repo ? 'tag' : 'world',
                     upLabel,
                     `${checkKind.replace(/^[ay]/, (c) => c.toUpperCase())}: ${upLabel}`,
+                    safeUrl(up.url),
                   ]
                 : [
                     'repology',
                     'chart-dots-3',
                     'Repology',
                     'Repology: the repositories it compares',
+                    repologyUrl,
                   ];
   const facts = [
-    pkg.nixVersion && ['nixpkgs unstable', html`<span class="mono">${pkg.nixVersion}</span>`],
     st === 'warn' && target && ['newest', html`<span class="mono pd-newer">${target}</span>`],
     st === 'warn' &&
       pkg.outdatedSince && [
@@ -4298,8 +4936,7 @@ function fillDetail(pkg, el, entries) {
         html`${longDate(pkg.outdatedSince)} <span class="pd-ago">(${daysText(pkg.outdatedSince)})</span>`,
       ],
   ].filter(Boolean);
-  // Notes that call for something stay in view; the rest are context, with
-  // the explanation behind "Why?".
+  // Notes that call for something first; then the rest, the context.
   const urgent = html`${unloaded}${archived}${checkNote}${insecureNote(pkg)}${backportNote(pkg)}${
     pkg.nixVulnerable
       ? html`<div class="vuln-note">⚠ Repology flags nixpkgs' version <span class="mono">${pkg.nixVersion}</span> as vulnerable.${
@@ -4339,9 +4976,9 @@ function fillDetail(pkg, el, entries) {
         pkg.maintainers.length
           ? pkg.maintainers.map(
               (m) =>
-                html`<span class="pd-pill maintainer"><button type="button" class="maint-btn" data-handle="${m}" title="Their packages here">@${m}</button><a class="pd-pill-go" href="https://github.com/${encodeURIComponent(m)}" target="_blank" rel="noopener" aria-label="${m} on GitHub" title="${m} on GitHub">↗</a></span>`,
+                html`<span class="pd-pill maintainer"><button type="button" class="maint-btn" data-handle="${m}" title="Their packages here"><img class="avatar" src="https://github.com/${encodeURIComponent(m)}.png?size=40" alt="" width="18" height="18" loading="lazy" referrerpolicy="no-referrer">${m}</button><a class="pd-pill-go" href="https://github.com/${encodeURIComponent(m)}" target="_blank" rel="noopener" aria-label="${m} on GitHub" title="${m} on GitHub">↗</a></span>`,
             )
-          : html`<span class="none-note">none in nixpkgs (<button type="button" class="maint-btn" data-handle="none" title="Packages with no maintainer">@none</button>)</span>`
+          : html`<span class="none-note">none in nixpkgs · <button type="button" class="maint-btn" data-handle="none" title="Every package with no maintainer">see all packages without one</button></span>`
       }</div></section>`,
     pkg.teams?.length &&
       html`<section class="pd-sec"><h4 class="other-label">Teams</h4><div class="pd-pills">${pkg.teams.map(
@@ -4358,36 +4995,41 @@ function fillDetail(pkg, el, entries) {
       html`<a class="pd-link" href="${homepage}" target="_blank" rel="noopener">${icon('home')}Homepage</a>`,
     safeUrl(pkg.source) &&
       html`<a class="pd-link" href="${safeUrl(pkg.source)}" target="_blank" rel="noopener" title="Where nixpkgs defines this package">${icon('file-code')}${sourceFileName(pkg.source)}</a>`,
-    pkg.project &&
-      html`<a class="pd-link" href="https://repology.org/project/${encodeURIComponent(pkg.project)}/versions" target="_blank" rel="noopener">${icon('chart-dots-3')}Repology</a>`,
   ].filter(Boolean);
-  const open = whyOpen();
   el.innerHTML = html`<div class="pd">
     <div class="pd-head">
       <span class="pd-verdict ${verdict[0]}">${verdict[1]}</span>
       <dl class="pd-facts">${facts.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
-      ${source ? html`<span class="pd-source ${source[0]}" title="${source[3]}">${icon(source[1])}<span class="pd-source-text">${source[2]}</span></span>` : ''}
+      ${
+        source
+          ? source[4]
+            ? html`<a class="pd-source ${source[0]}" href="${source[4]}" target="_blank" rel="noopener" title="${source[3]}">${icon(source[1])}<span class="pd-source-text">${source[2]}</span> <span aria-hidden="true">↗</span></a>`
+            : html`<span class="pd-source ${source[0]}" title="${source[3]}">${icon(source[1])}<span class="pd-source-text">${source[2]}</span></span>`
+          : ''
+      }
     </div>
     ${String(urgent).trim() ? html`<div class="pd-notes">${urgent}</div>` : ''}
     ${vulnSection(pkg)}
-    <div class="pd-why-body"${open ? '' : raw(' hidden')}>
-      <p class="pd-text">${nixLine}${
+    <div class="pd-why-body">
+      ${String(nixLine).trim() ? html`<p class="pd-text">${nixLine}</p>` : ''}${
         up?.tagged
-          ? html` <span title="nixkeeper prefers a release, when the project makes them: a tag alone may not be published yet">Tagged <span class="mono">${up.tagged}</span> on GitHub, not released yet.</span>`
+          ? html`<p class="pd-text" title="nixkeeper prefers a release, when the project makes them: a tag alone may not be published yet">Tagged <span class="mono">${up.tagged}</span> on GitHub, not released yet.</p>`
           : ''
-      }</p>
+      }
       ${String(context).trim() ? html`<div class="pd-notes">${context}</div>` : ''}
     </div>
     ${
-      chips.length
+      // Up to date, they'd all say the same version: the sentence's link
+      // has them. Outdated or not compared, they show who has what. Not for
+      // an older version kept on purpose, behind in its own series or not:
+      // they're the newer series' (and its betas: firefox 159.0b5 beside
+      // firefox-esr 153.5.1; glibmm 2.90.0 beside glibmm_2_4, outdated
+      // against its 2.66.10).
+      chips.length && st !== 'ok' && !olderVersionKept(pkg) && !pkg.keptBeside
         ? html`<section class="pd-sec"><h4 class="other-label">Compared against${repologyAge}</h4><div class="repo-chips">
       ${chips.map((e, i) => html`<span class="repo-chip ${e.ahead ? 'ahead' : ''}"${e.title ? html` title="${e.title}"` : ''}${i >= COMPARED_SHOWN ? raw(' hidden') : ''}>${e.repo} <span class="v mono">${e.version || '?'}</span></span>`)}${
         chips.length > COMPARED_SHOWN
           ? html`<button type="button" class="more-btn" aria-expanded="false">Show all ${chips.length}</button>`
-          : ''
-      }${
-        notKept && pkg.project
-          ? html` <a class="files-link" href="https://repology.org/project/${encodeURIComponent(pkg.project)}/versions" target="_blank" rel="noopener">${notKept} more on Repology ↗</a>`
           : ''
       }
     </div></section>`
@@ -4395,20 +5037,9 @@ function fillDetail(pkg, el, entries) {
     }
     ${githubSection(pkg)}
     ${people.length ? html`<div class="pd-people">${people}</div>` : ''}
-    <div class="pd-links">${links}<button type="button" class="pd-why" aria-expanded="${open}">${icon('chevron-down')}Why?</button>${hideButton(pkg)}</div>
+    <div class="pd-links">${links}<span class="pd-links-end">${hideButton(pkg)}</span></div>
   </div>`;
   el.querySelector('.pd-hide')?.addEventListener('click', () => setHidden(pkg, !isHidden(pkg)));
-  const why = el.querySelector('.pd-why');
-  why.addEventListener('click', () => {
-    const body = el.querySelector('.pd-why-body');
-    body.hidden = !body.hidden;
-    why.setAttribute('aria-expanded', !body.hidden);
-    try {
-      localStorage.setItem(WHY_KEY, body.hidden ? 'closed' : 'open');
-    } catch {
-      // not remembered: private browsing, or storage blocked
-    }
-  });
   // A maintainer's packages: searches for them (the search box, so the
   // address can be shared).
   // A team's packages: the team filter (?team=, shareable too).
@@ -4427,7 +5058,21 @@ function fillDetail(pkg, el, entries) {
       search.scrollIntoView({ block: 'nearest' });
     });
   }
-  el.querySelector('.more-btn')?.addEventListener('click', (e) => {
+  // Vulnerabilities: the worst VULNS_SHOWN, or all of them.
+  el.querySelector('.vl-more')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    const open = btn.getAttribute('aria-expanded') !== 'true';
+    const sec = btn.closest('.vl-sec');
+    sec.querySelectorAll('.vl-group > .vl-list > .vl').forEach((li, i) => {
+      li.hidden = !open && i >= VULNS_SHOWN;
+    });
+    sec.querySelectorAll('.vl-group').forEach((g) => {
+      g.hidden = !g.querySelector('.vl:not([hidden])');
+    });
+    btn.setAttribute('aria-expanded', open);
+    btn.textContent = open ? 'Show fewer' : `Show all ${btn.dataset.all}`;
+  });
+  el.querySelector('.more-btn:not(.vl-more)')?.addEventListener('click', (e) => {
     const btn = e.currentTarget;
     const open = btn.getAttribute('aria-expanded') !== 'true';
     el.querySelectorAll('.repo-chip').forEach((chip, i) => {
@@ -4469,27 +5114,57 @@ function currentFiltered() {
   const q = document.getElementById('search').value;
   facetBase = packages.filter((p) => passesOthers(p, q));
   const list = facetBase.filter((p) => inPlatform(p) && inNameSet(p) && byMaintainer(p));
-  if (sortAZ) return list;
-  // The vulnerable ones: worst severity first (in the order they had).
+  return sortedList(list, sortReverse ? -1 : 1);
+}
+
+// The list in the order picked (sortMode), reversed with dir -1; those with
+// nothing to sort by (no date, no newer version) last either way. Each
+// package's key worked out once, not at every comparison: sorting every
+// package compares about 170,000 pairs, and on a mid-range phone working
+// them out each time took half a second (Lighthouse, 2026-10-07). ISO dates
+// in UTC compare correctly as plain strings; undated ones last ("~").
+function sortedList(list, dir = 1) {
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  // The data arrives sorted by name, and Array.sort is stable.
+  if (sortMode === 'az') return dir > 0 ? list : [...list].reverse();
+  if (sortMode === 'oldest' || sortMode === 'newest') {
+    // How long its problem has lasted (the tile's kind, when one is picked).
+    const keyed = list.map((p) => ({ p, since: problemSince(p, activeFilter) || '' }));
+    const order = sortMode === 'oldest' ? dir : -dir;
+    keyed.sort((a, b) =>
+      !a.since || !b.since ? !a.since - !b.since : order * cmp(a.since, b.since),
+    );
+    return keyed.map((k) => k.p);
+  }
+  if (sortMode === 'gap') {
+    // The biggest update first (versionGap); numbering changes, then none
+    // (no newer version known), last either way.
+    const keyed = list.map((p) => ({
+      p,
+      gap: computeStatus(p) === 'warn' ? versionGap(p.nixVersion, targetVersion(p)) : null,
+    }));
+    keyed.sort((a, b) =>
+      !a.gap || !b.gap
+        ? !a.gap - !b.gap
+        : a.gap.scheme - b.gap.scheme ||
+          dir * (a.gap.level - b.gap.level || b.gap.step - a.gap.step),
+    );
+    return keyed.map((k) => k.p);
+  }
+  // Most pressing. The vulnerable ones: worst severity first (in the order
+  // they had).
   if (activeFilter === 'vuln') {
     const ranked = list.map((p) => ({ p, rank: severityRank(p) }));
-    ranked.sort((a, b) => a.rank - b.rank);
+    ranked.sort((a, b) => dir * (a.rank - b.rank));
     return ranked.map((k) => k.p);
   }
-  // Worst first, then longest first. Each package's rank and date worked
-  // out once, not at every comparison: sorting every package compares
-  // about 170,000 pairs, and on a mid-range phone working them out each
-  // time took half a second (Lighthouse, 2026-10-07). ISO dates in UTC
-  // compare correctly as plain strings; undated ones last ("~").
+  // Worst first, then longest first.
   const keyed = list.map((p) => {
     const rank = attentionRank(p);
     const since = rank === 1 ? p.outdatedSince : rank === 0 ? failingSince(p) : null;
     return { p, rank, since: since || '~' };
   });
-  keyed.sort(
-    (a, b) =>
-      a.rank - b.rank || (a.rank <= 1 ? (a.since < b.since ? -1 : a.since > b.since ? 1 : 0) : 0),
-  );
+  keyed.sort((a, b) => dir * (a.rank - b.rank || (a.rank <= 1 ? cmp(a.since, b.since) : 0)));
   return keyed.map((k) => k.p);
 }
 
@@ -4526,6 +5201,18 @@ document.addEventListener('click', (e) => {
   else return;
   update();
 });
+// Show errors: on or off.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('button[data-show-errors]')) return;
+  showErrors = !showErrors;
+  update({ keepPage: true });
+});
+// ↓/↑: the list's order reversed, or back.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('button[data-sort-dir]')) return;
+  sortReverse = !sortReverse;
+  update();
+});
 // The search's matches in all of nixpkgs: the next ones, or every one again
 // (moreMatchesHtml).
 document.addEventListener('click', (e) => {
@@ -4557,7 +5244,13 @@ document.addEventListener('change', (e) => {
     buildFailedFilter = e.target.value || null;
   else if (e.target.matches('select[data-platform-pick]')) platformFilter = e.target.value || null;
   else if (e.target.matches('select[data-in]')) inFilter = e.target.value || null;
-  else if (e.target.matches('select[data-status]')) statusFilter = e.target.value || null;
+  else if (e.target.matches('select[data-sort]')) sortMode = e.target.value || 'pressing';
+  else if (e.target.matches('select[data-newer]')) newerFilter = e.target.value || null;
+  else if (e.target.matches('select[data-pr-pick]')) {
+    refines.delete('withpr');
+    refines.delete('nopr');
+    if (e.target.value) refines.add(e.target.value);
+  } else if (e.target.matches('select[data-status]')) statusFilter = e.target.value || null;
   else if (e.target.matches('select[data-match-team]')) matchTeam = e.target.value || null;
   else if (e.target.matches('input[data-by]')) {
     const by = e.target.value.trim().replace(/^@/, '').toLowerCase();
@@ -4582,6 +5275,10 @@ document.getElementById('scope')?.addEventListener('click', (e) => {
     renderScope();
     return;
   }
+  if (e.target.closest('button.close-all')) {
+    closeRows(openRows());
+    return;
+  }
   if (e.target.closest('button.hidden-toggle')) {
     showHidden = !showHidden;
     update({ keepPage: true });
@@ -4601,6 +5298,11 @@ document.getElementById('scope')?.addEventListener('click', (e) => {
   }
   if (e.target.closest('button.merge-hidden-toggle')) {
     showHiddenPrs = !showHiddenPrs;
+    renderScope();
+    return;
+  }
+  if (e.target.closest('button[data-close-more]')) {
+    closeAll = !closeAll;
     renderScope();
     return;
   }
@@ -4650,12 +5352,6 @@ document.getElementById('search').addEventListener('input', () => {
   pkgParam = null; // a search leaves a package shown alone (?pkg=)
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => update(), 150);
-});
-document.getElementById('sortBtn').addEventListener('click', (e) => {
-  sortAZ = !sortAZ;
-  e.currentTarget.setAttribute('aria-pressed', sortAZ);
-  if (packages.length || community) update();
-  else writeViewToUrl();
 });
 // With every package: the links between views (a generated set, one
 // package, back to what needs attention) and the team picker. A click with
@@ -4785,6 +5481,23 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !e.target.closest('input, textarea') && !search.disabled) {
     e.preventDefault();
     search.focus();
+  } else if (
+    // Typing with the list focused (a row): into the search, as it filters
+    // as you type. Only there, not anywhere on the page: a letter alone
+    // shortcuts only its own component (WCAG 2.1.4), and Ctrl+F stays the
+    // browser's.
+    e.target.matches?.('tr.row') &&
+    e.key.length === 1 &&
+    e.key !== ' ' &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !search.disabled
+  ) {
+    e.preventDefault();
+    search.focus();
+    search.value += e.key;
+    search.dispatchEvent(new Event('input', { bubbles: true }));
   } else if (e.key === 'Escape' && e.target === search && search.value) {
     search.value = '';
     clearTimeout(searchTimer);
@@ -4817,6 +5530,7 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  let closed = false;
   for (const [panel, btn, show] of [
     ['themePanel', 'themeBtn', showThemePanel],
     ['legendPanel', 'legendBtn', showLegend],
@@ -4825,7 +5539,16 @@ document.addEventListener('keydown', (e) => {
     if (document.getElementById(panel).hidden) continue;
     show(false);
     document.getElementById(btn).focus();
+    closed = true;
   }
+  // No popover to close, and not in a field (Esc empties the search): the
+  // open packages, the keyboard on the row it was in, if any.
+  if (closed || e.target.matches('input, select, textarea')) return;
+  const rows = openRows();
+  if (!rows.length) return;
+  const at = document.activeElement?.closest('tr.detail')?.previousElementSibling;
+  closeRows(rows);
+  if (at?.matches('tr.row')) at.focus();
 });
 
 // The sticky header's height, for the column headings to stick under it.

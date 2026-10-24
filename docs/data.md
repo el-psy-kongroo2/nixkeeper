@@ -211,6 +211,8 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
   sets too), `unbuilt.json` (listed for a platform Hydra doesn't build it
   on, not in such a set: `datastore.unbuilt_where`, the page's struck
   platform tags; its count in `index.json`'s `views.unbuilt`),
+  `superseded.json` (an open update PR nixpkgs is already past, or an
+  init PR for a package it has: `supersededPRs`, in such sets too; its count in `views.superseded`),
   `maintainer/<handle>.json` (the handle in lowercase; `none.json`: no
   maintainer, not in such a set), `team/<slug>.json` and `list/<slug>.json` (the
   name in lowercase, each run of other characters than letters and digits
@@ -225,6 +227,9 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
   timed out or aborted; together, the counts' `failingBuilds`),
   "behind" (update PRs behind upstream), "unmaintained" (packages outside
   the sets with no maintainer) }` (`datastore.numbers`).
+- `close` in `index.json` (with every package): `{ "prs", "bot", "init" }`,
+  the open update PRs nixpkgs is already past, how many are r-ryantm's,
+  and the init PRs for a package it has (`prs_digest.mark_superseded`): "nixpkgs in numbers".
 - `views/merge.json`: the open PRs a maintainer can merge now with nixpkgs'
   merge bot, from nixkeeper-prs' digest (eligible by nixpkgs CI's label, CI
   green, no conflict, no changes requested, not a draft, touching tracked
@@ -278,7 +283,8 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
 - `names.json`: `{ "names": [ [name, status], ... ] }` for every row, with
   its set as a third element when it's in a set updated in bulk. `status` is a letter as the
   page's dot: `f` failed, `m` outdated but merged on master, `o` outdated,
-  `u` up to date, `n` can't be compared; then `v` when vulnerable (flagged
+  `u` up to date, `n` can't be compared (or compared with nothing:
+  `onlyNixpkgs`); then `v` when vulnerable (flagged
   by Repology, or marked insecure by nixpkgs).
 - `facets.json`: `{ "handles": [...], "teams": [...], "rows": [...] }`, one
   entry in `rows` for each of `names.json`'s, in the same order: where it's
@@ -331,12 +337,13 @@ lists, nixpkgs' own and those of the 8 newest other repositories). Instead:
 | `refVersion` | the newest version seen elsewhere (for a devel row, the newest devel one), or what nixkeeper's update check found, or what master has (`master`), whichever is newest |
 | `refFromMaster` | `true` when `refVersion` is master's: newer than anything Repology or an update check knows of |
 | `repoCount` | how many other repositories Repology compares it with (each counted once) |
+| `onlyNixpkgs` | `true` when no repository outside nixpkgs has it (nixpkgs' release channels aren't another). With `nixStatus` `unique` and no `upstream` or `feed`, its version was compared with nothing: the page shows it grey ("only in nixpkgs"), its status letter is `n`. Packages it's true for get the GitHub releases digest's result even when it only confirms their version |
 | `devel` | a development variant of a split project: newer than its stable one, or named for one (`wesnoth-devel`, `_1password-gui-beta`); or a version Repology calls devel |
 | `keptBeside` | for an older version nixpkgs keeps on purpose (Repology's `legacy`: `tracy_0_11`, `gnumake42`, `php82Extensions.zip`), the newer one beside it: `{ "attr", "version" }` |
 | `feed` | when its versions are compared with its own source instead of Repology: `{ "name", "version", "released"?, "dated"?, "url" }`, its newest version there, the day it was published (when the source says), and `dated` when versions are a build's date and time (MELPA's `20251005.508`). `nixStatus` and `refVersion` are then from it. Typst packages, with Typst Universe: `outdated` or `newest` for a package's latest attribute (`typstPackages.cetz`), `legacy` for its other versions (`typstPackages.cetz_0_3_0`). Emacs packages, with the archive each comes from (`MELPA` for a MELPA version, else the first of `MELPA Stable`, `NonGNU ELPA` and `GNU ELPA` that has it, in nixpkgs' order); not the hand-written ones, the devel archives' versions or packages no archive has. Haskell packages nixpkgs pins to Stackage LTS, with that series' newest snapshot (`Stackage LTS 24`): also `snapshot` (`lts-24.62`), `followed` (the one nixpkgs follows, `lts-24.38`) and `heldBack` (Hackage's newer version, which Stackage holds back until its next series); the rest of `haskellPackages` keep Repology's verdict. R packages, with `CRAN` or the Bioconductor release nixpkgs pins (`Bioconductor 3.23`) |
 | `archived` | `true` for an R package on neither CRAN nor the Bioconductor release nixpkgs pins any more (archived by CRAN, or dropped by Bioconductor); its status stays Repology's. nixpkgs marks most of those broken already |
-| `nixVulnerable` | Repology flags `nixVersion` as vulnerable (its CVEs: `https://repology.org/project/<project>/cves`) |
-| `vulnerabilities` | from nixkeeper-vulnerabilities, when it has any for one of its attributes (the full row only): its CVEs (the NixOS security tracker's) and OSV's advisories, `[{"id", "source": "tracker" \| "osv", "verdict", "issue"?, "github"?, "severity"?, "score"?, "summary"?, "releases"?, "cves"?, "ecosystem"?}]`, counted ones first, worst severity first. `verdict`: `affected` (`nixVersion` is in the CVE's affected range), `tracker` (the ranges can't be read; the tracker said affected when it last evaluated the package), `wontFix`, `osv` (an OSV advisory lists `nixVersion`; not for a CVE the tracker has) count (`byVersion` in data from before nixkeeper checked every version itself, 2026-10-08: now `affected`); `fixed` (outside the ranges), `patched` (counted otherwise, but nixpkgs carries a patch named after the CVE: a file `CVE-2026-1234.patch`, a fetched patch's name or URL), `unconfirmed` (the ranges can't be read, and the tracker didn't say affected), `dismissed` (the security team says not affected) don't. `issue`: the tracker's `NIXPKGS-…`, `github` its nixpkgs issue; `releases`: its status on the release branches (`{"release-26.05": "affected"}`: a fix to backport), the newest's by the version its channel has now (nixos-26.05's package index), or `patched` when that channel carries a patch named after the CVE, the others' as the tracker last evaluated them |
+| `nixVulnerable` | Repology flags `nixVersion` as vulnerable (its CVEs: `https://repology.org/project/<project>/cves`); not for an older version kept beside a newer one (`keptBeside`), which Repology judges by the newer series' CVE ranges: the security tracker's and OSV's verdicts decide there |
+| `vulnerabilities` | from nixkeeper-vulnerabilities, when it has any for one of its attributes (the full row only): its CVEs (the NixOS security tracker's) and OSV's advisories, `[{"id", "source": "tracker" \| "osv", "verdict", "issue"?, "github"?, "severity"?, "score"?, "summary"?, "releases"?, "fixedIn"?, "prs"?, "cves"?, "ecosystem"?}]`, counted ones first, worst severity first. `verdict`: `affected` (`nixVersion` is in the CVE's affected range), `tracker` (the ranges can't be read; the tracker said affected when it last evaluated the package), `wontFix`, `osv` (an OSV advisory lists `nixVersion`; not for a CVE the tracker has) count (`byVersion` in data from before nixkeeper checked every version itself, 2026-10-08: now `affected`); `fixed` (outside the ranges), `patched` (counted otherwise, but nixpkgs carries a patch named after the CVE: a file `CVE-2026-1234.patch`, a fetched patch's name or URL), `unconfirmed` (the ranges can't be read, and the tracker didn't say affected), `dismissed` (the security team says not affected) don't. `issue`: the tracker's `NIXPKGS-…`, `github` its nixpkgs issue; `releases`: its status on the release branches (`{"release-26.05": "affected"}`: a fix to backport), the newest's by the version its channel has now (nixos-26.05's package index), or `patched` when that channel carries a patch named after the CVE, the others' as the tracker last evaluated them. `fixedIn`: for an affected one, the version that fixes it by its ranges (`affected <3.20.1`: `3.20.1`; not for a commit, nor for an older series kept beside a newer one, `keptBeside`: `vulnerabilities_digest.fixed_in`). `prs`: open PRs patching one still affecting it, their diff adding its id (nixkeeper-prs' `diffFacts.cves`; not a PR touching other packages only): `[{"number", "title", "base"?: not master, "draft"?}]` (`prs_digest.add_cve_prs`) |
 | `backport` | the ids of its CVEs fixed on nixpkgs master (`verdict` `fixed`) but still affected on the newest release branch the tracker evaluates (`release-26.05`): a fix to backport |
 | `vuln` | in the list's entries only, when the row has `vulnerabilities`: `{"n", "severity"?, "by"}`, how many of them count, the worst severity among those, and who says it's vulnerable (`tracker`, `osv`, `nixpkgs`, `repology`); `null` when none does. Missing: Repology's flag and nixpkgs' mark decide, as before |
 | `markedInsecure` | nixpkgs marks one of its attributes insecure: its reasons (`meta.knownVulnerabilities` in the package index, each once: `["CVE-2018-19655"]`, `["Uses Electron 39.8.10, which was EOL ..."]`); such a package won't build unless allowed (`permittedInsecurePackages`). Counts as vulnerable |
@@ -354,7 +361,12 @@ A row counts as outdated when `nixStatus` is `outdated`, `upstream.newer`
 is `true` (a newer release, for a versioned attribute in its own series),
 or master has a newer version. `legacy` (an older version kept beside a
 newer one, `keptBeside`) isn't outdated by itself, except for a devel row
-behind the newest devel version elsewhere (`refVersion`).
+behind the newest devel version elsewhere (`refVersion`), or one behind in
+its own series: `nixStatus` is then `outdated` and `refVersion` its
+series' newest, from releases in two distributions or more. The series is
+told by nixpkgs' next newer version, preferably one whose first part
+differs (thunderbird 158.0 for thunderbird-153's 153.4.0, not nixpkgs' own
+thunderbird-esr-bin at 153.5.0, which would make it 153.4).
 
 `upstream`:
 
@@ -384,7 +396,8 @@ behind the newest devel version elsewhere (`refVersion`).
 | `stagingNextBlockedBy` | builds on master, but on staging-next a dependency failing there stops it, at the same version: `eval`, `evaluatedAt`, `builds` (`system`, `build`, `by`: each dependency, `name` and `row` when it's a row) |
 | `stagingNextBlocks` | its failure on staging-next stops others that build on master: `eval`, `evaluatedAt`, `packages`, `builds` |
 | `stagingNextBreaks` | builds on master but fails its own build on staging-next at the same version, in Hydra's newest evaluation of it (nixkeeper-hydra's `staging-next.json.gz`): `eval`, `evaluatedAt`, `builds` (`attr`, `system`, `build`: each failing job there), and `cycle` (`n`, `cut`: the open staging-next PR into master). A forecast: no count includes it |
-| `openPRs`, `openIssues` | how many open nixpkgs PRs and issues have `searchTerm` in their title |
+| `openPRs`, `openIssues` | how many open nixpkgs PRs and issues are about it: PRs whose titles name it or one of its `attrs` as nixpkgs' convention does (`pkg: 2.7.5 -> 2.8.2`, after any tags: `[26.05] pkg: ...`, `[WIP] pkg: ...`), issues with its name or `searchTerm` whole in their title (`Build failure: pkg`, not `pkg-config`). Searched per package instead (the listing failed, or an instance of its own lists), GitHub's search counts them: titles with `searchTerm`'s words |
+| `searchShowsMore` | `["pr"]`, `["issue"]` or both: GitHub's search of `searchTerm`'s words, which the page links, shows more than those (a name that's a word: pkg, linux) |
 | `countedAt` | when those were last counted (left out: at `checkedAt`): daily, from a listing of all of nixpkgs' open PRs and issues (searched per package instead when that fails: then every 3 days for a package with none open and not outdated) |
 
 `openPR` and `masterPR`: `number`, `title`, `url`, `draft`, `base` (the
@@ -423,6 +436,15 @@ requested", or "no activity since 2026-06-19" after 90 days); the same
 `proposed` is on the removal in `otherPRs`. The list's "being removed"
 badge is only for a removal without `proposed`.
 
+`supersededPRs` (in the list too): its open update PRs nixpkgs is already
+past, as nixkeeper-prs' digest finds them (state `superseded`: nixpkgs,
+master's version else the channel's, has the PR's version or a newer one;
+snapshots by their dates); and init PRs for it, nixpkgs having it already
+(the digest's `alreadyIn`, added another way while they waited), with
+`"init": true`. Oldest first: `[{"number", "title", "author", "created",
+"now": nixpkgs' version, "draft"?, "init"?}]`. A maintainer's and a
+team's "Can be closed", the list's **PR to close**, `views/superseded.json`.
+
 `recentFixes` (the full row only): its fixes of the last 30 days, newest
 first, at most 3, each as in `history.json`'s `fixed` (without the name):
 `{"at", "kind", "from"?, "to"?, "pr"?, "author"?, "mergedBy"?, "likely"?}`,
@@ -432,7 +454,13 @@ for its panel.
 master since it began failing that touched it (by its title's package, or
 its `pkgs/by-name` directory, of a PR touching at most 3; not one marking
 packages broken): `{"number", "title", "url", "author"?, "mergedBy"?,
-"merged"?}`, likely the fix, kept while it still fails.
+"merged"?}`, likely the fix, kept while it still fails. Not an update to
+the version a failed build is at: that one is in the failing build.
+
+`buildCausePR` (the full row only): while a build fails at another version
+than it last built at, the merged update PR to that version (its title
+`attr: 1.1.0 -> 1.2.4`), likely what broke it; the same fields, kept while
+it still fails that way (`prs_digest.build_fix_prs`).
 
 From nixkeeper-prs too, the full row only, at most 5 of each:
 

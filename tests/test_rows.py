@@ -56,7 +56,7 @@ class Rows(unittest.TestCase):
         firefox = rows["firefox"]
         # And firefox-esr, kept beside the release, not the beta.
         esr_entries = [
-            nix("firefox-esr", "153.4.0", "legacy"),
+            nix("firefox-esr", "153.4.0", "legacy") | {"vulnerable": True},
             nix("firefox", "158.0", "newest"),
             nix("firefox-devedition", "159.0b1", "devel"),
             other("arch", "158.0", "newest"),
@@ -73,6 +73,8 @@ class Rows(unittest.TestCase):
             )
         }["firefox-esr"]
         self.assertEqual(esr["keptBeside"], {"attr": "firefox", "version": "158.0"})
+        # Repology's flag, by the newer series' CVE ranges: not for it.
+        self.assertNotIn("nixVulnerable", esr)
         self.assertEqual(
             (firefox["nixStatus"], firefox["refVersion"], firefox["devel"]),
             ("outdated", "158.0", False),
@@ -155,6 +157,19 @@ class Rows(unittest.TestCase):
         self.assertEqual(
             row(old, current, other("aur", "39.0.0", "newest")), ("outdated", "39.0.0")
         )
+
+    def test_only_nixpkgs(self):
+        """python313Packages.pbar2, 2026-10-23: unique, as no repository
+        outside nixpkgs has it (its release channels aren't another)."""
+        entries = [
+            nix("p", "2.2.1", "unique"),
+            other("nix_stable_26_05", "2.2.1", "unique"),
+        ]
+        (row,) = self.rows(project("p", ["p"], entries, "p"))
+        self.assertTrue(row.get("onlyNixpkgs"))
+        entries.append(other("aur", "2.2.1", "newest"))
+        (row,) = self.rows(project("p", ["p"], entries, "p"))
+        self.assertNotIn("onlyNixpkgs", row)
 
     def test_behind_only_another_commit(self):
         """vimPlugins.nvim-treesitter-parsers.liquid, 2026-10-20:
@@ -340,6 +355,23 @@ class Rows(unittest.TestCase):
         # Once the channel has it: kept again.
         channel_versions([row], {"glibmm_2_4": pkg("glibmm_2_4", version="2.66.10")})
         self.assertEqual(row["nixStatus"], "legacy")
+
+    def test_a_kept_series_beside_its_own_binary(self):
+        # thunderbird-153 153.4.0 beside thunderbird 158.0, 2026-10-23:
+        # nixpkgs' thunderbird-esr-bin had 153.5.0, which made its series
+        # 153.4; 153.5.1 was out.
+        row = self.kept(
+            "thunderbird-153",
+            "153.4.0",
+            "158.0",
+            nix("thunderbird-esr-bin", "153.5.0", "outdated"),
+            other("freebsd", "153.5.1", "legacy"),
+            other("gentoo", "153.5.1", "legacy"),
+        )
+        self.assertEqual(
+            (row["nixStatus"], row["refVersion"], row["keptBeside"]["version"]),
+            ("outdated", "153.5.1", "158.0"),
+        )
 
     def test_a_kept_series_not_by_its_packaging(self):
         # ruby 3.4.9, 2026-10-15: 3.4.11 in five distributions, Chocolatey's

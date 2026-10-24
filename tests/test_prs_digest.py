@@ -379,6 +379,41 @@ class BuildFixPRs(unittest.TestCase):
         prs_digest.build_fix_prs(rows, [], previous)
         self.assertEqual(rows[0]["buildFixPR"], kept)
 
+    def test_the_update_it_fails_at_is_the_cause(self):
+        # tgrep: last built at 1.1.0, failing at 1.2.4 since #575734 updated
+        # it (2026-10-23): in the failing build, so not its fix.
+        row = {
+            "name": "tgrep",
+            "failingSince": "2026-10-22T15:30:00Z",
+            "builds": [
+                {"status": "failed", "version": "1.2.4", "lastSuccessVersion": "1.1.0"}
+            ],
+        }
+        update = {
+            "number": 575734,
+            "title": "tgrep: 1.1.0 -> 1.2.4",
+            "url": "u",
+            "merged": "2026-10-23T10:34:15Z",
+        }
+        fix = {
+            **update,
+            "number": 1,
+            "title": "tgrep: fix the build",
+            "merged": "2026-10-23T12:00:00Z",
+        }
+        prs_digest.build_fix_prs([row], [update], {"packages": []})
+        self.assertNotIn("buildFixPR", row)
+        self.assertEqual(row["buildCausePR"]["number"], 575734)
+        # A fix merged after it is still one; the cause kept as the list moves.
+        prs_digest.build_fix_prs([row], [fix], {"packages": []})
+        self.assertEqual(row["buildFixPR"]["number"], 1)
+        self.assertEqual(row["buildCausePR"]["number"], 575734)
+        # An earlier sync's "fix" that is the cause is dropped.
+        previous = {"packages": [{"name": "tgrep", "buildFixPR": update}]}
+        del row["buildFixPR"], row["buildCausePR"]
+        prs_digest.build_fix_prs([row], [], previous)
+        self.assertNotIn("buildFixPR", row)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -618,6 +653,122 @@ class CveIssues(unittest.TestCase):
         rows[0]["issueChecks"] = [{"number": 9, "kind": "build"}]
         prs_digest.add_cve_issues(rows, [])
         self.assertEqual(rows[0]["issueChecks"], [{"number": 9, "kind": "build"}])
+
+
+class CvePRs(unittest.TestCase):
+    """Open PRs whose diff adds a CVE id (2026-10-23: alsa-lib's patches for
+    CVE-2026-90781, #563607; binutils' #575362, mapped to no package)."""
+
+    def test_on_the_vulnerabilities(self):
+        rows = [
+            {
+                "name": "alsa-lib",
+                "vulnerabilities": [
+                    {"id": "CVE-2026-90781", "verdict": "affected"},
+                    {"id": "CVE-2026-1", "verdict": "fixed"},
+                ],
+            },
+            {
+                "name": "binutils",
+                "vulnerabilities": [{"id": "cve-2026-6846", "verdict": "notFixed"}],
+            },
+            {
+                "name": "other",
+                "vulnerabilities": [{"id": "CVE-2026-90781", "verdict": "affected"}],
+            },
+        ]
+        prs = [
+            {
+                "n": 563607,
+                "title": "alsa-lib: Fetch CVE-2026-90781 Patches",
+                "base": "master",
+                "packages": ["alsa-lib"],
+                "diffFacts": {"cves": ["CVE-2026-90781", "CVE-2026-1"]},
+            },
+            {
+                "n": 575362,
+                "title": "binutils: add patch for CVE-2026-6846",
+                "base": "staging",
+                "draft": True,
+                "packages": [],
+                "diffFacts": {"cves": ["CVE-2026-6846"]},
+            },
+        ]
+        prs_digest.add_cve_prs(rows, prs)
+        alsa = rows[0]["vulnerabilities"]
+        self.assertEqual(
+            alsa[0]["prs"],
+            [{"number": 563607, "title": "alsa-lib: Fetch CVE-2026-90781 Patches"}],
+        )
+        self.assertNotIn("prs", alsa[1])  # fixed already
+        self.assertEqual(
+            rows[1]["vulnerabilities"][0]["prs"][0],
+            {
+                "number": 575362,
+                "title": "binutils: add patch for CVE-2026-6846",
+                "base": "staging",
+                "draft": True,
+            },
+        )
+        self.assertNotIn("prs", rows[2]["vulnerabilities"][0])  # another package's PR
+
+
+class MarkSuperseded(unittest.TestCase):
+    """Update PRs nixpkgs is already past (2026-10-23: 255, ocamlPackages.trace:
+    0.5 -> 0.12 open since 2024 with nixpkgs at 0.12)."""
+
+    def pr(self, n, attr, state="superseded", **kw):
+        found = {
+            "n": n,
+            "title": f"{attr}: 0.5 -> 0.12",
+            "author": "r-ryantm",
+            "created": f"2026-0{n}-01T00:00:00Z",
+            "state": state,
+            "update": {"attr": attr, "from": "0.5", "to": "0.12", "now": "0.12"},
+        }
+        found.update(kw)
+        return found
+
+    def test_on_the_rows(self):
+        rows = [
+            {"name": "ocamlPackages.trace", "attrs": ["ocamlPackages.trace"]},
+            {"name": "python313Packages.rq", "attrs": ["python313Packages.rq"]},
+            {"name": "wine", "supersededPRs": [{"number": 1}]},  # an earlier sync's
+        ]
+        prs = [
+            self.pr(3, "ocamlPackages.trace", author="someone", draft=True),
+            self.pr(2, "ocamlPackages.trace"),
+            self.pr(4, "python3Packages.rq"),  # the alias: python313Packages
+            self.pr(5, "wine", state="overtaken"),  # needs a rebase, not closing
+            self.pr(6, "elsewhere"),
+        ]
+        self.assertEqual(
+            prs_digest.mark_superseded(prs, rows), {"prs": 3, "bot": 2, "init": 0}
+        )
+        self.assertEqual([p["number"] for p in rows[0]["supersededPRs"]], [2, 3])
+        self.assertEqual(rows[0]["supersededPRs"][1]["draft"], True)
+        self.assertEqual(rows[0]["supersededPRs"][0]["now"], "0.12")
+        self.assertEqual(rows[1]["supersededPRs"][0]["number"], 4)
+        self.assertNotIn("supersededPRs", rows[2])
+        self.assertIsNone(prs_digest.mark_superseded(None, rows))
+
+    def test_init_prs_for_a_package_nixpkgs_has(self):
+        # dcpomatic: init at 2.15.171, open since 2021; nixpkgs has 2.18.51.
+        rows = [{"name": "dcpomatic", "nixVersion": "2.18.51"}]
+        init = {
+            "n": 144680,
+            "title": "dcpomatic: init at 2.15.171",
+            "author": "lukegb",
+            "created": "2021-11-05T00:58:10Z",
+            "alreadyIn": {"attr": "dcpomatic", "version": "2.18.51"},
+        }
+        self.assertEqual(
+            prs_digest.mark_superseded([init], rows), {"prs": 0, "bot": 0, "init": 1}
+        )
+        found = rows[0]["supersededPRs"][0]
+        self.assertEqual(
+            (found["number"], found["now"], found["init"]), (144680, "2.18.51", True)
+        )
 
 
 class MergeSummary(unittest.TestCase):

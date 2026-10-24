@@ -33,6 +33,7 @@ import {
   hasFailure,
   homeHref,
   html,
+  inPickedSet,
   isVulnerable,
   maintainerMatches,
   maintainersKeep,
@@ -57,6 +58,7 @@ import {
   prPrint,
   raw,
   safeUrl,
+  sameRelease,
   searchHandle,
   severityRank,
   shardOf,
@@ -71,8 +73,10 @@ import {
   unbuiltWhere,
   updateTitle,
   versionDiff,
+  versionGap,
   viewPath,
   viewSlug,
+  vulnFixes,
   vulnSources,
   vulnSummary,
   waitingForChannel,
@@ -334,6 +338,23 @@ describe('master ahead of the channel', () => {
     assert.equal(aheadOnMaster(wesnoth({ master: '1.19.24' })), false);
     assert.equal(computeStatus(wesnoth({ master: '1.19.24' })), 'ok');
     assert.equal(aheadOnMaster(pkg({ nixVersion: '1.0' })), false);
+  });
+  test("not the channel's release with a suffix Repology drops", () => {
+    // firefox-esr: master 153.5.1esr, Repology 153.5.1; an older version kept
+    // beside firefox's 158.0.1, not outdated against it.
+    const esr = pkg({
+      nixStatus: 'legacy',
+      nixVersion: '153.5.1',
+      refVersion: '158.0.1',
+      master: '153.5.1esr',
+      keptBeside: { attr: 'firefox', version: '158.0.1' },
+    });
+    assert.equal(aheadOnMaster(esr), false);
+    assert.equal(computeStatus(esr), 'neutral');
+    assert.equal(onMaster({ ...esr, masterPR: { to: '153.5.1esr' } }), null);
+    assert.equal(sameRelease('153.5.1esr', '153.5.1'), true);
+    assert.equal(sameRelease('1.0rc', '1.0'), false);
+    assert.equal(sameRelease('1.0.1', '1.0'), false);
   });
   test("isn't a new release to act on in the tab icon", () => {
     assert.equal(faviconKey([wesnoth()]), 'ok');
@@ -1357,5 +1378,90 @@ describe('decodeFacets and matchFacets with facets', () => {
   });
   test('while facets.json loads, its filters keep everything', () => {
     assert.equal(matchFacets(names, { by: 'iedame' }).kept.length, 3);
+  });
+});
+
+describe('searching by the name nixpkgs titles use', () => {
+  test('python3Packages. finds python313Packages.', () => {
+    const pkg = { name: 'python313Packages.requests', searchTerm: 'python3Packages.requests' };
+    assert.equal(matchesSearch(pkg, 'python3Packages.'), true);
+    assert.equal(matchesSearch(pkg, 'python313Packages.req'), true);
+    const names = [
+      ['python313Packages.requests', 'u'],
+      ['requests-oauthlib', 'u'],
+    ];
+    const { found } = nameMatches(names, 'python3Packages.req', new Set());
+    assert.deepEqual(
+      found.map(([n]) => n),
+      ['python313Packages.requests'],
+    );
+  });
+});
+
+describe('inPickedSet', () => {
+  test('python3Packages picks any python3xPackages', () => {
+    assert.equal(inPickedSet('python313Packages', 'python3Packages'), true);
+    assert.equal(inPickedSet('python314Packages', 'python3Packages'), true);
+    assert.equal(inPickedSet('python313Packages', 'python313Packages'), true);
+    assert.equal(inPickedSet('python313Packages', 'perl5Packages'), false);
+    assert.equal(inPickedSet('pythonPackages', 'python3Packages'), false);
+  });
+});
+
+describe('versionGap', () => {
+  test('a major update before a minor, a minor before a patch, bigger steps first', () => {
+    assert.deepEqual(versionGap('2.8.2', '3.2.4'), { level: 0, step: 0.5, scheme: false });
+    assert.deepEqual(versionGap('5.0.0', '5.0.1'), { level: 2, step: 1, scheme: false });
+    assert.deepEqual(versionGap('1.2.0', '1.9.0'), { level: 1, step: 3.5, scheme: false });
+    assert.deepEqual(versionGap('1.0', '1.0-rc2'), { level: 2, step: 1, scheme: false });
+    assert.equal(versionGap('1.0', '1.0'), null);
+    assert.equal(versionGap('1.0', null), null);
+  });
+  test('relative steps: a build number moves less than a major version', () => {
+    assert.ok(versionGap('10798', '11832').step < versionGap('2.0', '3.0').step);
+  });
+  test('a numbering change has no size; dates count in years', () => {
+    assert.equal(versionGap('2026-10', '202610050438').scheme, true);
+    assert.equal(versionGap('0-unstable-2021-04-19', '2021041900').scheme, true);
+    assert.equal(versionGap('9', '10').scheme, false); // a digit more is fine
+    assert.equal(versionGap('20261009101206', '20261021011254').step, 0);
+    assert.equal(versionGap('20060219', '20221026').step, 16);
+  });
+});
+
+describe('nothingCompared', () => {
+  test("unique with no other repository and no check of nixkeeper's own: grey", () => {
+    const alone = { nixStatus: 'unique', onlyNixpkgs: true };
+    assert.equal(computeStatus(alone), 'neutral');
+    assert.equal(computeStatus({ ...alone, upstream: { version: '1' } }), 'ok');
+    assert.equal(computeStatus({ ...alone, feed: { name: 'CRAN' } }), 'ok');
+    assert.equal(computeStatus({ nixStatus: 'unique' }), 'ok');
+  });
+});
+
+describe('vulnFixes', () => {
+  // barman: 3.19.1, the newest 3.20.1, an update PR to it.
+  const barman = (over = {}) =>
+    outdated({ nixVersion: '3.19.1', refVersion: '3.20.1', openPR: { to: '3.20.1' }, ...over });
+  test('what master, the update PR and the newest release fix', () => {
+    const vulns = [{ fixedIn: '3.20.1' }, { fixedIn: '3.19.4' }, {}];
+    assert.deepEqual(vulnFixes(barman(), vulns), {
+      need: '3.20.1',
+      named: 2,
+      master: null,
+      pr: 2,
+      newest: 2,
+    });
+    const behind = barman({ openPR: { to: '3.20.0' }, master: '3.19.5' });
+    assert.deepEqual(vulnFixes(behind, vulns), {
+      need: '3.20.1',
+      named: 2,
+      master: 1,
+      pr: 1,
+      newest: 2,
+    });
+  });
+  test('null when none names a version', () => {
+    assert.equal(vulnFixes(barman(), [{}, { id: 'CVE-1' }]), null);
   });
 });

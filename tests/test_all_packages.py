@@ -306,6 +306,15 @@ class Data(unittest.TestCase):
         self.assertEqual(datastore.status(row("a", nixVulnerable=True)), "uv")
         insecure = row("a", markedInsecure=["CVE-2020-25031"])
         self.assertEqual(datastore.status(insecure), "uv")  # nixpkgs' own say
+        # Unique with nothing compared: not up to date (pbar2); with a check
+        # of nixkeeper's own, it is.
+        alone = row("a", nixStatus="unique", onlyNixpkgs=True)
+        self.assertEqual(datastore.status(alone), "n")
+        checked = row(
+            "a", nixStatus="unique", onlyNixpkgs=True, upstream={"version": "1"}
+        )
+        self.assertEqual(datastore.status(checked), "u")
+        self.assertEqual(datastore.status(row("a", nixStatus="unique")), "u")
         waiting = row("a", nixStatus="outdated", refVersion="2", master="2")
         self.assertEqual(datastore.status(waiting), "m")
 
@@ -390,6 +399,7 @@ class Data(unittest.TestCase):
                 "broken": 0,
                 "blocked": 0,
                 "backport": 0,
+                "superseded": 0,
                 "unbuilt": 0,
                 "teams": {"Gaming": 1},
                 "lists": {"gaming-team": 1},
@@ -459,6 +469,22 @@ class Data(unittest.TestCase):
         self.assertEqual(names("views/backport.json"), ["f"])
         counts = self.read("index.json")["counts"]
         self.assertEqual((counts["backport"], counts["vulnerable"]), (1, 0))
+
+    def test_update_prs_to_close(self):
+        """An open update PR nixpkgs is already past: its own view, up to date
+        or not, in a set or not (?view=superseded)."""
+        pr = {"number": 1, "title": "t: 0.5 -> 0.12", "now": "0.12"}
+        rows = [
+            row("t", supersededPRs=[pr]),
+            row("rPackages.u", set="rPackages", supersededPRs=[pr]),
+            row("v"),
+        ]
+        datastore.write(
+            {"checkedAt": NOW, "allPackages": True, "packages": rows}, {}, self.out
+        )
+        names = [p["name"] for p in self.read("views/superseded.json")["packages"]]
+        self.assertEqual(names, ["rPackages.u", "t"])
+        self.assertEqual(self.read("index.json")["views"]["superseded"], 2)
 
     def test_set_bar_each_package_at_its_worst(self):
         def r(name, **more):

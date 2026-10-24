@@ -98,8 +98,16 @@ the top, split: their own failure, a dependency's, unfinished), packages not bui
 ## Lists
 
 Each row is a package. Clicking it opens [its details](#a-packages-details);
-clicking its build or update cell opens that panel instead. One package is
-open at a time, so opening another closes it.
+clicking its build or update cell opens that panel instead. Several can be
+open at once, each closing on its own; with two or more open, **Close all**
+beside the list's count, or Esc, closes them. A package's name is a link to
+it alone (`?pkg=`): Ctrl/Cmd-click or middle-click opens it in a tab of its
+own. Its **Open on GitHub** cell counts the open nixpkgs PRs about it
+(titled with its name, as nixpkgs' convention has it: "pkg: 2.7.5 ->
+2.8.2", after any tags: "[26.05] pkg: ...") and the issues with its name in their title, each with GitHub's
+icon and a link to GitHub's search ("—" when there are none). The search
+matches words, so for a name that's also a word (pkg, linux) it shows more,
+as its hover says.
 
 **Opening a list.** At the top of every page:
 
@@ -119,6 +127,7 @@ A list says what it is under "Showing" (✕ goes back to the overview):
 | one package alone, its details open | `?pkg=firefox` |
 | marked broken, blocked by a dependency | |
 | fixes to backport: a CVE fixed on nixpkgs master but still affected on the newest release branch (on the overview, a note under Vulnerable, as unstable has the fix; the details say which) | `?view=backport` |
+| PRs to close: every package with an open update PR nixpkgs is already past (it has the PR's version or a newer one), or an init PR for it while nixpkgs has it already, up to date or not, sets too (linked from "Can be closed", from **PR to close** in another list, and from "nixpkgs in numbers") | `?view=superseded` |
 | one of the instance's lists | `?list=` (by address only) |
 
 **Counts and tiles.** On a page tracking its own lists, the counts at the
@@ -136,11 +145,16 @@ marked broken, blocked).
 
 **Searching.** The search box matches names; `@handle` lists a maintainer's
 packages instead (their whole GitHub handle, as nixpkgs lists it in
-`meta.maintainers`), and `@none` the packages with no maintainer. Within a
+`meta.maintainers`), and `@none` the packages with no maintainer (a
+package's panel links them too, when it has none: "see all packages without
+one"). Within a
 list, the search and order work on it too, and a search also lists the
 packages beyond it whose names match, closest first. The browser's find
 (Ctrl+F) only sees the page shown: the search box looks through every
-package.
+package. It filters as you type; `/` jumps to it, and so does typing with
+a row of the list focused (after clicking one, or tabbing to it). Python
+packages are found as nixpkgs titles write them too: `python3Packages.`
+finds `python313Packages.…`.
 
 Those matches in all of nixpkgs show 50 at a time ("Show 200 more" for the
 next), and narrow by **in** a package set (the same `?in=` as the list's,
@@ -154,8 +168,19 @@ opens a team's page). Each choice says how many match with the others
 picked; **Clear filters** goes back to every match. `?q=python&status=outdated` is
 every outdated package with "python" in its name.
 
-**Pages.** The list shows 200 packages at a time, most in need of attention
-first; the page links under it go through the rest (`?page=2`). "Per page"
+**Order.** **Sort** under the tiles picks it, and ↓/↑ beside it reverses
+it (`?sort=…&order=reverse`); packages with nothing to sort by stay last
+either way:
+
+| Sort | First |
+|---|---|
+| most pressing (the default) | failing, then outdated, the longest-standing of each first (vulnerable ones by severity, on Vulnerable) |
+| longest-standing | how long it's been failing or outdated, the tile's kind when one is picked (`?sort=oldest`); outdated dates only go back to when nixkeeper started following a package |
+| newest | the opposite (`?sort=newest`) |
+| biggest version gap | the biggest update: a new first part (2.8.2 → 3.2.4) before a new second (1.2 → 1.9), and so on; within those, the bigger step relative to the old number; a date as a version (20221026) by years. Numbering changes (2026-10 → 202610050438) after them (`?sort=gap`). Its top often shows Repology matching the wrong project |
+| name A–Z | by name (`?sort=az`) |
+
+**Pages.** The list shows 200 packages at a time, in that order; the page links under it go through the rest (`?page=2`). "Per page"
 beside them shows 50, 100, 200, 500 or 1,000 at a time instead (`?per=500`,
 kept when moving between views; the maintainers' list too), staying on the
 page that holds the first package you were looking at. Changing a filter,
@@ -184,10 +209,12 @@ what's left.
 |---|---|---|
 | **without maintainer** | packages with no maintainer | `?refine=unmaintained` |
 | **not marked broken** | failures nobody has marked yet | `?refine=notbroken` |
-| **not fixed on master yet** | outdated packages, leaving out those whose update is merged and waits for nixos-unstable | `?refine=notonmaster` |
+| **not merged yet** | outdated packages, leaving out those whose update is already merged: on master (waiting for nixos-unstable), into staging or staging-next, or a branch like haskell-updates | `?refine=notonmaster` |
 | **breaks on staging-next** | packages that build on master but fail their own build on staging-next, at the same version, in Hydra's newest evaluation of it (a day or two old): unless fixed, they fail on master when staging-next is merged into it. A forecast: no count includes it, and a fix may already be waiting on staging. The details link each failing build | `?refine=stagingnext` |
 | **not built where listed** | packages nixpkgs lists for a platform Hydra doesn't build them on (no build exists there: usually a dependency isn't available there, or `meta.platforms` promises too much); with a platform picked, that platform's only. Packages Hydra builds nowhere (unfree, kept off it) aren't. For all of nixpkgs at once, its own list: **Not built where listed** (`?view=unbuilt`, linked from Marked broken), where a platform picked keeps those not built there (`?view=unbuilt&platform=darwin`, `aarch64-linux`) | `?refine=unbuilt` |
-| **with an open PR** | packages an open PR touches; with **Marked broken**, those a PR may fix (or that it's moot for, while it stays broken: a person checks; the panel says so too) | `?refine=withpr` |
+| **open PR**: with one, or without | with one: packages an open PR touches; with **Marked broken**, those a PR may fix (or that it's moot for, while it stays broken: a person checks; the panel says so too) Without one: those no open PR touches, nobody on them yet | `?refine=withpr`, `?refine=nopr` |
+| **newer version**: known, or none known | whether a newer version than nixpkgs' is known (outdated, merged or not); with Build failures, none known means an update won't fix it, the build does (`?filter=builds&newer=no`), known with **Open PR: without** that nobody has opened the update that might | `?newer=yes`, `?newer=no` |
+| **PR to close** | packages with an open update PR nixpkgs is already past, or an init PR for a package it has (see [Can be closed](#maintainers-and-teams)); in any list, with a link to all of nixpkgs' | `?refine=superseded` |
 | **bot won't update it** | outdated packages nixpkgs-update won't update by itself, so it takes someone: it can't, skips them on purpose, or has never tried them and they aren't in its queue; none with an update PR open or merged | `?refine=nobot` |
 | **not via a team** (on a maintainer's page) | see [teams](#maintainers-and-teams) | `?team=none` |
 | **build failed because** | build failures for one reason, as the build's log on Hydra says (read by nixkeeper-hydra): compile error, tests, link error, missing header, CMake 4 (it refuses projects asking for CMake older than 3.5), CMake, Python import, dependencies, build or metadata, writes to `$HOME`, hash, patch, download, out of disk (Hydra's side), other, and more; "not read yet" while nixkeeper-hydra catches up. Each with how many there are in the list, on the platform picked | `?buildFailed=cmake4` |
@@ -195,7 +222,7 @@ what's left.
 | **older than** a month, 6 months, a year, 2 or 3 years | how long it's been failing or outdated (the counts' kind, when one is picked: failing for over 6 months, say) | `?age=1m`, `6m`, `1y`, `2y`, `3y` |
 | **never built** | a failing build that never succeeded on Hydra, which has no date. With **on**, only there: when it's all that fails, the list shows "n/a" instead of how long, and the build column "never: darwin", say | `?age=never` |
 | **on** Linux, Linux x86_64, Linux aarch64 or Darwin (macOS, as nixpkgs calls it) | the packages available there, and only their builds there (build failures on aarch64-linux, say), as clicking a row's platform tag does; not those listed there but not built there by Hydra (a struck tag), unless **not built where listed** is on | `?platform=linux`, `x86_64-linux`, `aarch64-linux`, `darwin` (`macos` still works) |
-| **in** a package set | one set, by the attribute's first part (`python313Packages` for `python313Packages.requests`, `vimPlugins`), or the top-level packages | `?in=python313Packages`, `?in=top-level` |
+| **in** a package set | one set, by the attribute's first part (`python313Packages` for `python313Packages.requests`, `vimPlugins`), or the top-level packages; `python3Packages`, as nixpkgs writes it, is every `python3…Packages` | `?in=python313Packages`, `?in=python3Packages`, `?in=top-level` |
 | **by** a maintainer | the packages a maintainer is listed for (`meta.maintainers`), within the list shown (needs attention, a team's...): type their GitHub handle; those with the most there are suggested. Not on a maintainer's own page, which is theirs already | `?by=fabaff` |
 
 **On**, **in** and **by** say how many each choice would show, counted
@@ -204,6 +231,9 @@ with `by` fabaff, `in` offers python313Packages with fabaff's count there.
 A set's count is in packages; the pages under the list count rows, where
 [one update moving many](#lists) is one.
 
+A chip that's on is tinted, with ✕ at its end, as the list's own chip
+("Needs attention ✕"): clicking it turns it off.
+
 The `?refine=` words combine (`?refine=unmaintained,notbroken`), so
 "failing for 6 months, with no maintainer" is a link. A build failure's date
 is Hydra's last success; the others only go back to when nixkeeper started
@@ -211,22 +241,32 @@ following a package, so "older than" finds more of them as time goes on.
 
 ## A package's details
 
-Its panel lists every repository Repology compares it with (after
-`nixkeeper` first when an update check found a version: hover it for
-where), and links to its homepage and nixpkgs source.
+Its panel starts with where its newest version is from, a badge linking
+there: the release on GitHub, the package archive, the update merged on
+master, a community rule, or Repology's project. Then only what the badge
+doesn't say: another source's newest version when it differs, newer
+commits, or how many repositories it was compared with. While it isn't up
+to date, the repositories Repology compares it with follow (`nixkeeper`
+first when an update check found a version: hover it for where).
+
+Links are text ending in ↗ (Homepage, package.nix, a build's Build and
+Job, "full log"); actions are outlined buttons (Hide).
 
 **Its fixes of the last month**: "Updated 1.9.0 → 1.10.0 on Oct 9 (after
 3 w), in #N, by @alice, merged by @bob", and, while its build fails, a PR
 merged since that likely fixes it, waiting for Hydra.
 
-**On GitHub**: what nixkeeper-prs found of the package's PRs and issues:
+**On GitHub**: what nixkeeper-prs found of the package's PRs and issues,
+each with GitHub's icon for it (an open PR, a draft, a merged one in violet,
+an issue), and a short label ("merge-bot ready", "likely fix", "likely
+broke the build" (the update it's failed at since), "builds now ·
+can close"), the sentence behind it on hover:
 
 - its update PR ready for the merge bot, superseded or overtaken, blocking
   the update bot, or duplicated; **behind** when upstream has a newer
   version than it brings (merged, the package would still be outdated:
-  worth updating the PR first), and **for a vulnerable package** when the
-  package counts as vulnerable (worth reviewing first, and checking whether
-  its version fixes the CVEs);
+  worth updating the PR first). For a vulnerable package, it's under its
+  vulnerabilities instead (below);
 - open PRs touching it while its build fails on Hydra (maybe its fix), and
   for a package marked broken, that open PRs touch it (one may fix it);
 - its other open PRs, a removal first ("removes it from nixpkgs": the list
@@ -235,8 +275,31 @@ merged since that likely fixes it, waiting for Hydra.
   or "(no activity since ...)", and the list says nothing);
 - its issues that look done (a build failure that builds on Hydra now, an
   update request nixpkgs has met, an issue about CVEs none of which affect
-  nixpkgs' version as nixkeeper reads them; "check the condition" when the
+  nixpkgs' version as nixkeeper reads them; "check it" when the
   title names something Hydra doesn't build) or still fail.
+
+A merged PR's author and merger are on its link's hover.
+
+**Vulnerabilities**: the CVEs and advisories that count, worst first, with
+what they share said once above them ("24 CVEs: 4 critical, 8 high ... · all
+affected · still affected on 26.05"); grouped by the security tracker's
+issue (linked once, with its nixpkgs issue), a line each: the id, its
+severity and its summary (cut short, whole on hover), and what it doesn't
+share, with **fixed in** the version that fixes it, where the CVE's
+version ranges say ("affected <3.20.1": fixed in 3.20.1), and **patched
+by** the open PRs whose diff adds its id ("patched by #578062, #578074
+(into release-26.05)": a fix and its backport). The worst five,
+then **Show all**. Under them, whether an update fixes them: master's
+version ("Master has 1.2.6, which fixes them"), the open update PR's
+("#564426 updates it to 3.20.1, which fixes it; review it first", or "fixes
+3 of 6: all fixed in 1.21.1"), the newest release's ("The newest release,
+1.21.1, fixes them"), or none yet ("newer than any release nixkeeper knows
+of"). Counted among those that name a fixed version; with none, "check
+whether that fixes it". A fix only in a newer series than nixpkgs' (mariadb
+11.4 against 12.2.2) says to check for a backport, which ranges miss; an
+older series kept beside a newer one (firefox-esr) gets no fixed in, its
+CVEs' ranges written for the newer. Those not counted (fixed, unconfirmed,
+dismissed) are folded below.
 
 These are worked out automatically, from titles, Hydra's builds and the
 merge bot's rules: hints for a person to check before acting (closing an
@@ -245,8 +308,9 @@ closes or merges anything in nixpkgs.
 
 ### Maintainers and teams
 
-The panel lists the package's maintainers: clicking one searches for
-theirs, and the address becomes `?maintainer=yourhandle`, a link to your own
+The panel lists the package's maintainers, each with their GitHub avatar
+(loaded from github.com only while a panel is open, without saying which
+page asked: no referrer): clicking one searches for theirs, and the address becomes `?maintainer=yourhandle`, a link to your own
 (`?q=@yourhandle`, as it was first written, still opens it and becomes
 that). Its teams (nixpkgs' `meta.teams`), when it has any, are listed too:
 clicking one shows only that team's packages, as `?team=` does in the
@@ -273,6 +337,19 @@ changes (a newer version in its title, or a CVE; not upstream moving on,
 so an update held back on purpose stays hidden), with "N hidden · show
 them" to see them again, greyed. From
 nixkeeper-prs' digest, as of the last sync.
+
+**Can be closed:** below it, on a maintainer's or a team's page, the open
+update PRs on their packages that nixpkgs is already past: it has the
+PR's version or a newer one (`ocamlPackages.trace: 0.5 -> 0.12` with
+nixpkgs at 0.12), so the PR can be closed, with a word on why, or updated
+to the newest. And the init PRs for a package nixpkgs has now, added
+another way while they waited (`macshot: init at 4.0.4` with nixpkgs at
+4.1.2): "nixpkgs has it now". Each says who opened it, how long it's been
+open, what nixpkgs has now, and when it's a draft; oldest first, with **Hide** as
+above, and a link to all of nixpkgs' (`?view=superseded`). Snapshots are
+compared by their dates: a snapshot nixpkgs only renamed
+(`unstable-2023-12-06` to `0.18.1-unstable-2023-12-06`) doesn't count as
+past a PR's newer one. A package's details say it too, under On GitHub.
 
 **Hide until it changes:** a package that needs attention has this button
 in its panel, for what you've looked at and decided to leave (an update
@@ -302,9 +379,11 @@ Leaving packages out, each a chip to undo it:
 
 ## Where the data is from
 
-"checked … ago", at the top, opens when each source's data is from: the
-sync, the nixpkgs commit, then each of nixkeeper's digests with what the
-sync read from it:
+"checked … ago", at the top, opens when the last sync ran and the nixpkgs
+commit it read. On nixkeeper.com, every source and how fresh it is is on
+[status.nixkeeper.com](https://status.nixkeeper.com), each digest's row
+with what the sync read from it; an instance of its own lists the sources
+in the panel instead:
 
 | Digest | Read |
 |---|---|
@@ -315,7 +394,9 @@ sync read from it:
 | [digest-prs](https://github.com/nixkeeper/digest-prs) | nixpkgs' open PRs and issues, the PRs merged since the channel's commit, and those merged into staging or staging-next |
 
 A source the sync didn't use (too old, or it couldn't be read) says so in
-yellow: its packages were then asked about one by one instead.
+yellow: its packages were then asked about one by one instead. Why
+staging-next wasn't used (its cycle already merged into master) is on the
+**breaks on staging-next** chip's hover.
 
 ## The dot
 
@@ -324,11 +405,11 @@ to "checked" at the top for all of them):
 
 | Dot | Means |
 |---|---|
-| green | up to date: nixpkgs has the newest version (for a devel package, the newest devel one), or is the only one packaging it, or an [up-to-date rule](community.md#up-to-date-rules-until-something-changes) says Repology gets its version wrong (the details say why). Also when the newer version is only another spelling of the same snapshot: `unstable-2022-10-20` against nixpkgs' older channels' `2022-10-20`; or only nixpkgs' own earlier version: one only its old release channels have (no longer updated: a numbering nixpkgs has since changed), or one only its release channels have while PyPI, CRAN or another upstream index has unstable's (azure's 39.0.0, a mistake since reverted); or only another commit on a nixpkgs channel (tree-sitter grammars' `0.0.0+rev=e45dbac` against 26.05's `rev=9566ca7`: commits have no order) |
-| orange | outdated: Repology or nixkeeper's own update check knows a newer version |
-| violet | outdated, but the update is already merged on master, waiting for nixos-unstable (usually a few days). Master having a newer version than the channel counts too, even before Repology or an update check knows of it |
+| green | up to date: nixpkgs has the newest version (for a devel package, the newest devel one), or is the only one packaging it and nixkeeper's update check (GitHub's releases, a package archive) confirms its version, or an [up-to-date rule](community.md#up-to-date-rules-until-something-changes) says Repology gets its version wrong (the details say why). Also when the newer version is only another spelling of the same snapshot: `unstable-2022-10-20` against nixpkgs' older channels' `2022-10-20`; or only nixpkgs' own earlier version: one only its old release channels have (no longer updated: a numbering nixpkgs has since changed), or one only its release channels have while PyPI, CRAN or another upstream index has unstable's (azure's 39.0.0, a mistake since reverted); or only another commit on a nixpkgs channel (tree-sitter grammars' `0.0.0+rev=e45dbac` against 26.05's `rev=9566ca7`: commits have no order) |
+| orange | outdated: Repology or nixkeeper's own update check knows a newer version; for an older version kept beside a newer one, a newer release in its own series (`glibmm_2_4` 2.66.10, `thunderbird-153` 153.5.1), which the details say, without the newer series' repositories |
+| violet | outdated, but the update is already merged on master, waiting for nixos-unstable (usually a few days). Master having a newer version than the channel counts too, even before Repology or an update check knows of it; not the channel's own release with a suffix Repology drops (firefox-esr's `153.5.1esr` is its `153.5.1`) |
 | pink | not in nixpkgs unstable (counted as failed) |
-| grey | Repology can't compare the version: `untrusted`, `rolling`, `noscheme`, `incorrect` (shown as a badge); **unsupported**: nixpkgs' version is `0-unsupported`, as it doesn't build the package in its default configuration (CUDA packages for another CUDA); or an **older version** nixpkgs keeps on purpose beside a newer one (`tracy_0_11` beside `tracy`, `php82Extensions` beside PHP 8.4's): not outdated while nothing newer is out in its own series, and the details name the newer one |
+| grey | Repology can't compare the version: `untrusted`, `rolling`, `noscheme`, `incorrect` (shown as a badge); **only in nixpkgs**: no other repository packages it and no update check of nixkeeper's knows its releases, so nothing compared it; **unsupported**: nixpkgs' version is `0-unsupported`, as it doesn't build the package in its default configuration (CUDA packages for another CUDA); or an **older version** nixpkgs keeps on purpose beside a newer one (`tracy_0_11` beside `tracy`, `php82Extensions` beside PHP 8.4's): not outdated while nothing newer is out in its own series, and the details name the newer one, without the repositories it's compared with (the newer series'). Repology's vulnerable flag doesn't count for it (it judges by the newer series' CVEs; an ESR gets fixes backported): the security tracker and OSV decide |
 
 ## The version
 
@@ -379,7 +460,7 @@ PR and issue counts:
 | `on staging`, `on staging-next` (violet) | the update is merged into staging or staging-next, the branches mass rebuilds go through (libraries, compilers, curl, coreutils): it reaches master when staging-next is merged into it, about every two to three weeks; staging's goes to the next staging-next first. Links to its PR; the details say since when, which staging-next, and for staging-next's, how it builds there in Hydra's newest evaluation of it (a day or two old: its day is said). Still outdated until then |
 | `devel` | a development release, compared against other devel versions |
 | `insecure` | nixpkgs itself marks it insecure (`meta.knownVulnerabilities`): it won't build unless allowed; the details give nixpkgs' reasons, their CVEs linked |
-| `vulnerable` | vulnerable, says one or more of: the NixOS security tracker (a CVE affecting the package), OSV (an advisory listing its version), Repology; hovering says who, and how many CVEs. Red for critical or high severity, orange for medium, grey for low; the vulnerable list goes worst first. The details list each CVE: its severity, the verdict, the tracker's issue and its nixpkgs issue, and the release branches still affected (a fix to backport); the ones not counted (fixed, unconfirmed, dismissed) folded below |
+| `vulnerable` | vulnerable, says one or more of: the NixOS security tracker (a CVE affecting the package), OSV (an advisory listing its version), Repology; hovering says who, and how many CVEs. Red for critical or high severity, orange for medium, grey for low; the vulnerable list goes worst first. The details list them, grouped by the tracker's issue: each one's severity and summary, the verdict and the release branches still affected (a fix to backport), said once when shared; the ones not counted (fixed, unconfirmed, dismissed) folded below |
 | `untrusted`, `rolling`, ... | Repology's status for a version it can't compare |
 | `not refreshed` | Repology couldn't be reached on the last sync: older data |
 | `check failing` | nixkeeper's own update check for it isn't working: fix it in `package-lists/update-checks.nix` |
@@ -387,15 +468,30 @@ PR and issue counts:
 ## Build failures
 
 From Hydra, which builds nixpkgs master. The cell opens the
-builds panel: how it stands ("Failing on 2 of 3", "Blocked on 1 of 3",
-"Building on all 3"), then a row per system with its status, when it last
-built, and its log, Hydra job, build or source to open:
+builds panel: a line per system with how it stands there (why it failed,
+"missing file", from its log; "not built"; blocked by which dependency),
+when it last built (the date on hover), its Hydra build and job (or source)
+to open; a failure at another version than it last built at says it's
+failed since that update: "at 1.2.4, since its update (#575734) · last
+built at 1.1.0", or "(its PR ↗)", a search of nixpkgs' merged PRs, when
+nixkeeper doesn't know which; and for a failure the log's lines that say why, with the **full
+log ↗**; "checked on Hydra N days ago" under them when it wasn't today.
+Builds failing alike (the same reason and log lines, a test run's timing
+aside: python313Packages and python314Packages on two platforms) are
+together, each its own line, their log's lines once under the last: "the
+same on all 4". For pytest, the lines are its failed tests and its count
+of them.
+
+**Show errors** (with the Build failures or Failed tile: `?errors=1`)
+opens every failing package's builds under its row, loaded as they scroll
+into view: a page of errors to read through, with **build failed because**
+to keep one kind.
 
 | Shows | Means |
 |---|---|
-| failed: … (pink) | its latest build failed on a platform, and why, from its log on Hydra (`compile error`, `tests`, `CMake 4`, `patch`...: as **build failed because** above), when every failed build says the same; `failure reported` when they differ or their logs aren't read yet. The panel says each build's reason with the log's lines that say so, links the log, and says when it last built, and at which version |
-| marked broken (gold) | nixpkgs marks it broken on a platform (known, so not counted as failed) |
-| blocked (gold) | it didn't build because a dependency failed: not its own failure, so not counted as failed (the "blocked" count and tile, `?filter=blocked`, list them); the panel says which dependency (its package, to open), once nixkeeper-hydra has read the build |
+| a hard hat, then why (pink) | its latest build failed on a platform, and why, from its log on Hydra (`compile error`, `tests`, `CMake 4`, `patch`...: as **build failed because** above), when every failed build says the same; `failure` when they differ or their logs aren't read yet (screen readers say "failed:" before it). `never: x86_64-linux` when it never built there. The panel says each build's reason with the log's lines that say so, links the log, and says when it last built, and at which version |
+| a hard hat, marked broken (gold) | nixpkgs marks it broken on a platform (known, so not counted as failed) |
+| a hard hat, blocked (gold) | it didn't build because a dependency failed: not its own failure, so not counted as failed (the "blocked" count and tile, `?filter=blocked`, list them); the panel says which dependency (its package, to open), once nixkeeper-hydra has read the build |
 | not built by Hydra | unfree, or kept off Hydra by nixpkgs |
 | none reported | no failure of its own; an unfinished build shows only in the panel |
 
@@ -403,17 +499,17 @@ built, and its log, Hydra job, build or source to open:
 
 From the nixpkgs-update bot (r-ryantm): its latest attempt. The cell opens the update panel: the outcome ("Failed: patch", "PR opened",
 "Can't update"...), when it was attempted and from which version to which,
-why, the log's last lines, the next attempt from the bot's queue (when, and
+why (unless the outcome already says it all: "Failed: build"), the log's last lines, the next attempt from the bot's queue (when, and
 what it would update to), and the log and every attempt to open:
 
 | Shows | Means |
 |---|---|
-| failed: … (pink) | the bot's update failed, and why, from its log: `tests`, `build`, `dependency` (one missing or too old), `patch` (nixpkgs' patches no longer apply), `source` (couldn't be fetched), `hash` (one the bot couldn't work out), `updateScript` (the package's own failed), `unavailable` (broken, insecure or not for x86_64-linux), `request` (the bot's own request failed, not the package). The panel says it in full, with the log's line that says so. `failure reported` when the log doesn't say |
-| can't update (gold) | a newer version exists, but none of the bot's ways of updating apply to this package: update it by hand, or give it an updateScript |
+| a robot, then why (pink) | the bot's update failed, and why, from its log: `tests`, `build`, `dependency` (one missing or too old), `patch` (nixpkgs' patches no longer apply), `source` (couldn't be fetched), `hash` (one the bot couldn't work out), `updateScript` (the package's own failed), `unavailable` (broken, insecure or not for x86_64-linux), `request` (the bot's own request failed, not the package). The panel says it in full, with the log's line that says so. `failure` when the log doesn't say (screen readers say "failed:" before it). The robot is red, or the queue's colour (below) when the bot will try again |
+| a robot, can't update (gold) | a newer version exists, but none of the bot's ways of updating apply to this package: update it by hand, or give it an updateScript |
 | skipped | the bot passes this package over on purpose (the package opts out, GNOME's release cycle, too many rebuilds, ...: the panel says which): while it does, updates are done by hand |
 | superseded | the attempt no longer matters: nixpkgs has moved past that version (in the channel, or merged on master), or a manual rule ignores it (`package-lists/ignored-updates.nix`) |
 | not attempted | the bot has never tried this package |
-| … · a robot's head | joined to any of these: nixpkgs-update will try it, from its queue (screen readers say "queued"). Green when to the newest version and its last attempt didn't fail, so its PR should follow; amber when it will try but it's unsure: its last attempt didn't work, it would update to another version, or only the package's updateScript runs, which decides the version (for outdated packages). Hover it for which; it opens the update panel too, which says when. When green and nothing's reported, the cell says when instead of "—": **auto update in 4 days** (in green), so you can leave it to the bot. Not shown while an update PR is open or merged |
+| the robot's colour | in front of any of these, where the dot was: nixpkgs-update will try it, from its queue (screen readers say "queued for an update"). Green when to the newest version and its last attempt didn't fail, so its PR should follow; amber when it will try but it's unsure: its last attempt didn't work, it would update to another version, or only the package's updateScript runs, which decides the version (for outdated packages). Hover the cell for which; the update panel says when. When green and nothing's reported, the cell says when instead of "—": **auto update in 4 days** (in green), so you can leave it to the bot. No robot when the bot isn't set to try it and nothing went wrong, or while an update PR is open or merged |
 | none reported | the bot opened a PR, found one open, had already pushed the update to its branch, had nothing to update (nothing newer by Nix's version order, say), or finished without a recognisable result (the panel says which) |
 
 The update panel also says when the bot will try the package again, from

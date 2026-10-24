@@ -302,7 +302,13 @@ def series_ref(name, version, entries, others, kept=False):
     if not newer:
         return None
     mine = plain_version(version)
-    sibling = VERSION_PART.findall(min(newer, key=version_key))
+    # The next series: of nixpkgs' newer versions, preferably one whose first
+    # part differs, not a newer release of version's own series packaged
+    # another way (thunderbird-esr-bin's 153.5.0 beside thunderbird-153's
+    # 153.4.0 made its series 153.4, missing 153.5.1, 2026-10-23); else the
+    # nearest (python313 beside python314).
+    apart = [v for v in newer if VERSION_PART.findall(v)[:1] != mine[:1]]
+    sibling = VERSION_PART.findall(min(apart or newer, key=version_key))
     at = next(
         (i for i, (a, b) in enumerate(zip(mine, sibling, strict=False)) if a != b), None
     )
@@ -399,6 +405,14 @@ def make_row(proj, name, attrs, nix, others, nixpkgs, devel):
         or newest("unique"),
         # Repositories, not entries: one can list a package several times.
         "repoCount": len({e.get("repo") for e in others}),
+        # No repository outside nixpkgs has it (nixpkgs' release channels
+        # aren't another): Repology's "unique" then compared it with
+        # nothing (datastore.nothing_compared).
+        **(
+            {"onlyNixpkgs": True}
+            if not any(not e.get("repo", "").startswith("nix_") for e in others)
+            else {}
+        ),
         # A devel variant of a split project, or a version Repology itself
         # classifies as devel (lincity).
         "devel": devel or (nix or {}).get("status") == "devel",
@@ -510,6 +524,12 @@ def make_row(proj, name, attrs, nix, others, nixpkgs, devel):
                 key=lambda e: (len(e.get("srcname") or ""), e.get("srcname") or ""),
             )
             row["keptBeside"] = {"attr": top.get("srcname"), "version": top["version"]}
+            # Repology's vulnerable flag judges it by the newer series' CVE
+            # ranges, which an older series kept on purpose gets fixes
+            # backported for (firefox-esr 153.5.1, flagged with nothing open
+            # in the tracker, 2026-10-23): the tracker's and OSV's verdicts,
+            # checked against its version, decide.
+            row.pop("nixVulnerable", None)
             # Kept, but behind in its own series (glibmm_2_4 2.66.8, 2.66.10
             # out): outdated against that, still kept beside the newer one.
             if not devel and (

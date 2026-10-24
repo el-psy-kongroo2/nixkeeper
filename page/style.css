@@ -276,13 +276,15 @@ header.top {
   display: grid;
   gap: 6px;
 }
+/* Headings (here, the popovers' titles, the details' facts and sections):
+   the size of what they head, in sentence case, set apart by weight and
+   colour; small capitals were a size and a half smaller than their
+   content (2026-10-23). */
 .theme-panel legend {
   padding: 0 0 6px;
-  color: var(--ink-faint);
-  font-size: 11px;
+  color: var(--ink-soft);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .theme-panel .choices {
   display: flex;
@@ -431,8 +433,11 @@ a:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline-strong));
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
-.refine-btn[aria-pressed="true"]::before {
-  content: "✓ ";
+/* On: ✕ at its end, as the view's chip has (click to remove). */
+.refine-btn[aria-pressed="true"]::after {
+  content: "✕";
+  margin-left: 6px;
+  font-size: 0.85em;
 }
 .refine-btn:focus-visible,
 .refine-age select:focus-visible,
@@ -452,6 +457,19 @@ a:focus-visible {
   border: 1px solid var(--hairline);
   border-radius: 6px;
   padding: 2px 6px;
+}
+/* Fixed widths, the same on every list: sized to their longest option,
+   which counts change from list to list, they moved what follows them
+   ("In any set" was 282px on Build failures, 310px on Update failures,
+   2026-10-23). A long choice is cut short in the closed box; its menu
+   shows it whole. The short ones (any / with one / without) narrower. */
+.refine-age select {
+  width: 11em;
+  text-overflow: ellipsis;
+}
+.refine-age select[data-newer],
+.refine-age select[data-pr-pick] {
+  width: 7.5em;
 }
 /* "By": a maintainer's handle, typed or picked (refineHtml). */
 .refine-age .by-pick {
@@ -589,11 +607,9 @@ button.checked:focus-visible {
 }
 .legend-panel .pop-title {
   margin: 0 0 8px;
-  color: var(--ink-faint);
-  font-size: 11px;
+  color: var(--ink-soft);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .legend-panel ul {
   list-style: none;
@@ -624,6 +640,12 @@ button.checked:focus-visible {
   grid-template-columns: auto 1fr;
   /* A name beside the first line of what it says, when that wraps. */
   align-items: baseline;
+}
+/* Its links below the list, one per line. */
+.sources-panel > .files-link {
+  display: block;
+  width: fit-content;
+  margin-top: 6px;
 }
 .sources-panel .unused .src-what {
   color: var(--caution);
@@ -1262,16 +1284,17 @@ button.checked:focus-visible {
   margin-left: 6px;
   font: inherit;
   font-size: 12px;
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   background: none;
-  border: 0;
-  padding: 2px 4px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  padding: 2px 8px;
   min-height: 24px;
   cursor: pointer;
-  text-decoration: underline dotted;
 }
 .merge-hide:hover {
   color: var(--ink);
+  border-color: var(--accent);
 }
 .merge-hidden-toggle {
   font: inherit;
@@ -1488,6 +1511,75 @@ table {
   border-collapse: separate;
   border-spacing: 0;
 }
+/* Wide enough for the table (narrower: cards), its columns are the same on
+   every list: sized to their content, they moved between Build failures
+   and Update failures, and a long version with its badges pushed the table
+   past the filters' edge (2026-10-23). A version too long for its column
+   wraps, as on phones. */
+@media (min-width: 1081px) {
+  table {
+    table-layout: fixed;
+  }
+  thead th:nth-child(1) {
+    width: 22%;
+  }
+  thead th:nth-child(2) {
+    width: 23%;
+  }
+  thead th:nth-child(3) {
+    width: 13%;
+  }
+  thead th:nth-child(4) {
+    width: 19%;
+  }
+  thead th:nth-child(5) {
+    width: 19%;
+  }
+  thead th:nth-child(6) {
+    width: 48px;
+  }
+  table .vcell {
+    grid-template-columns: minmax(0, max-content) 1fr;
+  }
+  table .v-now,
+  table .v-mid,
+  table .v-next,
+  table .vcell .v {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* A name with no dot or hyphen where it's too long for its column
+     (linuxPackages_xanmod_latest.rtl8821cu) breaks anywhere instead. */
+  table .pkg-name .who {
+    max-width: 100%;
+  }
+  table .pkg-name .n {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  /* Versions too long to have their badges beside them (tooWide, app.js):
+     the badges on a line under them instead, one after the other. */
+  table .vcell.long {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 5px;
+  }
+  table .vcell.long > .vcopy,
+  table .vcell.long > .v-now {
+    flex-basis: 100%;
+  }
+  table .vcell.long .v-tags {
+    justify-content: flex-start;
+  }
+  /* Every collapsed row the same height: room for a name on two lines (a
+     quarter of the rows) or two versions, so the list doesn't jump about
+     and the loading skeleton's rows match (index.html). Taller only for
+     the rare row that needs more. */
+  tbody tr.row > td {
+    height: 78px;
+  }
+}
 thead th {
   text-align: left;
   font-size: 12px;
@@ -1582,6 +1674,17 @@ tbody tr.row td {
 .pkg-name .n {
   font-weight: 600;
   font-size: 14.5px;
+}
+/* The name, a link to the package alone (?pkg=), for a tab of its own:
+   drawn as the name, underlined on hover. */
+a.pkg-link {
+  color: inherit;
+  text-decoration: none;
+}
+a.pkg-link:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--ink-faint);
+  text-underline-offset: 3px;
 }
 /* Secondary to the name: the platforms as one small pill ("Linux ·
    Darwin"). Each is still a button: a click filters by platform. */
@@ -1874,17 +1977,69 @@ button.plat[aria-pressed="true"] {
 /* The panel's CVEs and advisories. */
 .vl-list {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 0;
+  list-style: none;
   font-size: 12.5px;
 }
+/* Under its tracker issue: indented, as its group. */
+.vl-issue + .vl-list {
+  padding-left: 14px;
+}
+/* A line each: id, severity, summary cut short (whole on hover), and what
+   the line above them doesn't say (vulnSection). */
 .vl {
   margin: 4px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0 6px;
+  white-space: nowrap;
+}
+.vl[hidden],
+.vl-group[hidden] {
+  display: none;
+}
+.vl > * {
+  flex: none;
 }
 .vl-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--ink-soft);
+}
+/* "24 CVEs: 4 critical, 8 high ... · all affected · still affected on 26.05". */
+.vl-head {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+/* A tracker issue's CVEs, under its link. */
+.vl-issue {
+  margin: 8px 0 2px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.vl-more {
+  margin-top: 6px;
+}
+/* Phones: too narrow for a line each; the summary under the id instead. */
+@media (max-width: 640px) {
+  .vl {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+  .vl-summary {
+    flex-basis: 100%;
+  }
 }
 .vl-backport {
   color: var(--caution);
+}
+/* Its open update PR, under them (vulnSection). */
+.vl-pr {
+  margin: 6px 0 0;
+  font-size: 12.5px;
 }
 .vl-rest summary {
   cursor: pointer;
@@ -1974,55 +2129,25 @@ a.badge:hover {
   border-color: var(--hairline-strong);
   color: var(--ink);
 }
-/* The update cell's status joined to the robot (nixpkgs-update will try
-   it, from its queue): kept together on one line, two buttons with a dot
-   between, each opening the update panel; no pill behind them, so a row
-   with the robot doesn't stand out from those without. The robot green
-   when it's to the newest version and the last attempt didn't fail, amber
-   when the bot will try but it's unsure (queuedTag). */
-.upd-pair {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-}
-.upd-pair .failure-btn {
-  padding-right: 4px;
-}
-.queued-tag {
-  font: inherit;
-  font-size: 12.5px;
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 9px 4px 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: none;
-  color: var(--caution);
-  cursor: pointer;
-}
-.queued-tag::before {
-  content: "·";
-  padding-right: 5px;
-  color: var(--ink-faint);
-}
 /* The update cell's "auto update in 4 days" (botDueText): the robot's green. */
 .bot-due {
   color: var(--ok-devel);
   font-weight: 500;
 }
-.queued-tag.match {
-  color: var(--ok-devel);
-  font-weight: 500;
-}
-.queued-tag:hover {
-  filter: brightness(1.15);
-}
 .bot-icon {
   display: block;
 }
-.queued-tag:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+/* A failed update's robot, in place of the dot: red, or the queue's colour
+   when the bot will try again (amber; green when to the newest). A build's
+   hard hat the same: red failing, amber blocked or marked broken. */
+.bot-mark {
+  color: var(--danger);
+}
+.bot-mark.queued {
+  color: var(--caution);
+}
+.bot-mark.match {
+  color: var(--ok-devel);
 }
 .failure-na {
   color: var(--ink-faint);
@@ -2099,14 +2224,30 @@ a.badge:hover {
   font-weight: 600;
   color: var(--ink);
 }
-/* None open: still a link, but out of the way. */
-.gh-btn[data-zero] {
-  color: var(--ink-faint);
-  border-color: transparent;
+/* GitHub's icons (GH_ICONS): in the text's colour, beside their count in
+   the list; before each PR and issue in the details, a merged PR in the
+   violet of "merged" and a draft fainter. */
+.gh-btn {
+  align-items: center;
 }
-.gh-btn[data-zero] b {
-  color: inherit;
-  font-weight: 500;
+.gh-icon {
+  display: block;
+  flex: none;
+}
+.gh-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: bottom;
+}
+.gh-item .gh-icon {
+  color: var(--ink-soft);
+}
+.gh-item.merged .gh-icon {
+  color: var(--merged-dot);
+}
+.gh-item.draft .gh-icon {
+  color: var(--ink-faint);
 }
 /* The expand chevron: a round target that lights up with the row, and
    turns down when the row is open. */
@@ -2212,10 +2353,12 @@ tbody tr.row.open td {
   margin: 0;
 }
 .pd-facts dt {
-  color: var(--ink-faint);
-  font-size: 11px;
+  color: var(--ink-soft);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+}
+/* Written in lower case ("outdated since"): a sentence's capital. */
+.pd-facts dt::first-letter {
   text-transform: uppercase;
 }
 .pd-facts dd {
@@ -2283,10 +2426,9 @@ tbody tr.row.open td {
    what to open, in columns where there's room. */
 .br-list {
   display: grid;
-  /* Columns sized to what's in them and shared by every row (subgrid), so
-     the buttons line up right after the longest detail, not at the far
-     edge; the last, empty one takes the rest, for the rows' dividers. */
-  grid-template-columns: max-content max-content minmax(0, max-content) max-content 1fr;
+  /* Columns sized to what's in them and shared by every row (subgrid); the
+     detail takes the rest, so the buttons line up at the far edge. */
+  grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
   column-gap: 20px;
   border-top: 1px solid var(--hairline);
 }
@@ -2333,13 +2475,29 @@ tbody tr.row.open td {
   color: var(--ink-soft);
   background: var(--stale-soft);
 }
-/* Why a build failed (from its log), and the lines that say so, under the
-   row across its columns. */
-.br-why {
-  font-weight: 500;
+/* The lines from a failed build's log that say why, under the row across
+   its columns. */
+/* The log's lines and their link to the whole log on Hydra. */
+.br-log-wrap {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+}
+.br-full-log {
+  font-size: 12px;
+}
+/* "full log ↗ · the same on all 4" (groupedBuilds). */
+.br-log-foot {
+  justify-self: start;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+/* Failing alike, before the one that shows their log's lines: no line
+   between them, so they read as one group. */
+.br.alike {
+  border-bottom-color: transparent;
 }
 .br-log {
-  grid-column: 1 / -1;
   margin: 0;
   padding: 6px 10px;
   overflow-x: auto;
@@ -2355,12 +2513,10 @@ tbody tr.row.open td {
   min-width: 0;
 }
 .br-acts {
+  justify-self: end;
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 6px;
-}
-.br-acts .pd-link {
-  padding: 3px 9px;
+  gap: 12px;
 }
 @media (max-width: 640px) {
   .br-list {
@@ -2373,6 +2529,9 @@ tbody tr.row.open td {
   .br-acts {
     grid-column: 1 / -1;
   }
+  .br-acts {
+    justify-self: start;
+  }
 }
 .pd-why-body {
   display: grid;
@@ -2381,17 +2540,15 @@ tbody tr.row.open td {
 .pd-why-body[hidden] {
   display: none;
 }
-/* "Why?": the explanation's toggle, at the end of the links. */
 /* "Hide until it changes" (hideButton), after "Why?". */
 .pd-hide {
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 12px;
   color: var(--ink-soft);
   background: none;
   border: 1px solid var(--hairline-strong);
   border-radius: 6px;
-  padding: 3px 9px;
+  padding: 2px 8px;
   min-height: 24px;
   cursor: pointer;
 }
@@ -2414,29 +2571,40 @@ tbody tr.row.open td {
   border-style: solid;
   color: var(--ink);
 }
+/* "Close all (3)", while several packages are open (syncCloseAll). */
+.close-all {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.close-all:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
 /* A hidden package, while "show them" is on. */
 tr.row.is-hidden {
   opacity: 0.5;
 }
-.pd-why {
+/* The panel's last buttons ("Hide until it changes"), at the line's end. */
+.pd-links-end {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--accent);
-  background: none;
-  border: 0;
-  padding: 5px 4px;
-  cursor: pointer;
 }
-.pd-why .ic {
-  transition: transform 0.15s;
+/* A maintainer's GitHub picture, before their handle. */
+.maint-btn .avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: -4px;
+  background: var(--stale-soft);
 }
-.pd-why[aria-expanded="true"] .ic {
-  transform: rotate(180deg);
+a.pd-source {
+  text-decoration: none;
 }
 /* The explanation: readable lines, quieter than the facts. */
 .pd-text {
@@ -2602,40 +2770,47 @@ button.cause-more {
 .pd-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 16px;
+  align-items: center;
   border-top: 1px solid var(--hairline);
   padding-top: 12px;
 }
+/* Links that leave nixkeeper (Homepage, package.nix; a build's Build and
+   Job): text with ↗, in the accent's colour, no box. What acts on the page
+   is a button (outlined, .pd-hide). Same height as a button, to tap. */
 .pd-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
+  min-height: 24px;
   font-size: 12.5px;
   font-weight: 500;
   color: var(--accent);
   text-decoration: none;
-  padding: 5px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--hairline-strong);
-  background: var(--surface);
+}
+.pd-link .ic {
+  display: none;
+}
+.pd-link::after {
+  content: "↗";
 }
 .pd-link:hover {
-  background: var(--bg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 /* A panel's small headings ("Compared against"): like the popovers'. */
 .other-label {
   margin: 10px 0 8px;
-  color: var(--ink-faint);
-  font-size: 11px;
+  color: var(--ink-soft);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+}
+.other-label::first-letter {
   text-transform: uppercase;
 }
 /* How old the comparison is, when Repology wasn't asked today. */
 .other-label .since {
   font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
 }
 .repo-chips {
   display: flex;
@@ -2785,6 +2960,129 @@ a.page-btn:focus-visible {
 }
 .page-gap {
   color: var(--ink-faint);
+}
+/* The skeleton while the data loads (index.html): grey shapes the size of
+   what replaces them, a list's (its box of tiles and filters, then rows of
+   the list's height and columns) or the overview's, gently pulsing. */
+.loading:has(.sk) {
+  padding: 0;
+  text-align: left;
+}
+.sk {
+  display: grid;
+  animation: sk-pulse 1.6s ease-in-out infinite;
+}
+:root[data-start="list"] .sk-overview,
+:root:not([data-start="list"]) .sk-list {
+  display: none;
+}
+@keyframes sk-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+.sk-box {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 0 0 14px;
+}
+.sk-bar,
+.sk-tile,
+.sk-card,
+.sk-col,
+.sk-chip,
+.sk-dot {
+  display: block;
+  height: 16px;
+  max-width: 100%;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 7%, var(--surface));
+}
+.sk-chip {
+  display: inline-block;
+  box-sizing: border-box;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+}
+.sk-tiles,
+.sk-cards,
+.sk-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.sk-tile {
+  height: 58px;
+  border-radius: 8px;
+}
+.sk-cards {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.sk-card {
+  height: 118px;
+  border-radius: 10px;
+}
+.sk-cols {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 63px; /* "browse every maintainer" and a heading, above them */
+}
+.sk-col {
+  height: 317px;
+  border-radius: 10px;
+}
+/* The list's rows: its columns (style.css's table widths) and height. */
+.sk-head,
+.sk-row {
+  display: grid;
+  grid-template-columns: 22fr 23fr 13fr 19fr 19fr 48px;
+  align-items: center;
+  border-bottom: 1px solid var(--hairline);
+}
+.sk-head {
+  height: 24px;
+}
+.sk-row {
+  height: 78px;
+}
+.sk-row > span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+}
+.sk-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.sk-row .sk-bar {
+  flex: 0 1 auto;
+}
+/* Phones and tablets: the list is cards (name, version, build, update
+   stacked), so are its skeleton's rows. */
+@media (max-width: 1080px) {
+  .sk-head {
+    display: none;
+  }
+  .sk-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 14px;
+    height: auto;
+    padding: 18px 0;
+  }
+  .sk-row > span:nth-child(3),
+  .sk-row > span:nth-child(n + 6) {
+    display: none;
+  }
 }
 .loading,
 .empty,
@@ -3101,7 +3399,6 @@ a.page-btn:focus-visible {
   .checked,
   .hl-mode,
   .hl-all,
-  .queued-tag,
   .refine-btn,
   .refine-age select,
   .refine-age input {
@@ -3137,3 +3434,10 @@ a.page-btn:focus-visible {
   }
 }
 /* biome-ignore-end lint/complexity/noImportantStyles: - */
+/* ↓/↑ (sortPick): pressed means reversed, not a filter on: no ✕. */
+.refine-btn.sort-dir {
+  min-width: 2.2em;
+}
+.refine-btn.sort-dir[aria-pressed="true"]::after {
+  content: none;
+}
