@@ -21,16 +21,14 @@ as not in it yet. Otherwise the sync lists them itself, as it did before
 the digest.
 """
 
-import json
 import re
 import sys
-import urllib.error
 from datetime import datetime, timedelta
 
 from .. import config
 from ..changes import is_vulnerable
 from ..versions import is_newer, version_key
-from . import about, github, http
+from . import about, digests, github
 
 FORMAT = 1
 # The update bot (nixpkgs-update), as GitHub names it.
@@ -645,22 +643,9 @@ def node(pr):
     }
 
 
-def _read(base, name):
-    """Read one of the digest's files, checking its format.
-
-    Raises:
-        ValueError: The file is empty or in a format this nixkeeper doesn't
-            read.
-    """
-    data = json.loads(http.get(base + name, compressed=True) or "null")
-    if not data or data.get("format") != FORMAT:
-        raise ValueError(f"no {name} in a format this nixkeeper reads")
-    return data
-
-
 def _list(base, name, key):
     """Read the list under key in one of the digest's files (name)."""
-    return _read(base, name).get(key) or []
+    return digests.read_json(base, name, FORMAT).get(key) or []
 
 
 def load(now, revision):
@@ -683,16 +668,14 @@ def load(now, revision):
     if not base:
         return None
     try:
-        meta = json.loads(http.get(base + "meta.json") or "null")
-        if not meta or meta.get("format") != FORMAT:
-            raise ValueError(f"no digest in a format this nixkeeper reads ({base})")
+        meta = digests.read_meta(base, FORMAT)
         issues_meta = meta.get("issues") or {}
         merged_meta = meta.get("merged") or {}
         staging_meta = meta.get("staging") or {}
         found = {"open": None, "merged": None, "staging": None}
         why = []
         if recent(meta.get("generatedAt"), now) and recent(issues_meta.get("at"), now):
-            data = _read(base, "prs.json")
+            data = digests.read_json(base, "prs.json", FORMAT)
             raw_issues = _list(base, "issues.json", "issues")
             prs = [node(p) for p in data.get("prs") or []]
             issues = [{"number": i["n"], "title": i["title"]} for i in raw_issues]
@@ -727,7 +710,7 @@ def load(now, revision):
         # (listed since 2026-10-16): where each is, and the staging-next
         # cycle.
         if recent(staging_meta.get("at"), now):
-            data = _read(base, "staging.json")
+            data = digests.read_json(base, "staging.json", FORMAT)
             found["staging"] = {
                 "prs": [
                     {**node(p), "on": p["on"], "merged": p.get("merged")}
@@ -736,12 +719,8 @@ def load(now, revision):
                 ],
                 "stagingNext": data.get("stagingNext") or {},
             }
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        about.note("prs", False, f"couldn't be read ({e})")
-        print(
-            f"::warning::PRs digest: couldn't use it ({e}); listing them here",
-            file=sys.stderr,
-        )
+    except digests.FAILURES as e:
+        digests.give_up("prs", "PRs digest", e, "; listing them here")
         return None
     used = found["open"] is not None or found["merged"] is not None
     about.note(

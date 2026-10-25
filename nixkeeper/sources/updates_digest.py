@@ -14,11 +14,10 @@ import gzip
 import io
 import json
 import sys
-import urllib.error
 from datetime import datetime, timedelta
 
 from .. import config
-from . import about, http
+from . import about, digests
 
 # The digest's format this nixkeeper reads.
 FORMAT = 1
@@ -30,8 +29,8 @@ def current(meta, now):
     It is when it was made within UPDATES_DIGEST_MAX_AGE_HOURS; its
     workflow runs every 3 hours.
     """
-    age = datetime.fromisoformat(now) - datetime.fromisoformat(meta["fetchedAt"])
-    return age <= timedelta(hours=config.UPDATES_DIGEST_MAX_AGE_HOURS)
+    hours = digests.hours_since(meta["fetchedAt"], now)
+    return hours <= config.UPDATES_DIGEST_MAX_AGE_HOURS
 
 
 def load(now):
@@ -47,31 +46,24 @@ def load(now):
     if not base:
         return None
     try:
-        meta = json.loads(http.get(base + "meta.json") or "null")
-        if not meta or meta.get("format") != FORMAT:
-            raise ValueError(f"no digest in a format this nixkeeper reads ({base})")
+        meta = digests.read_meta(base, FORMAT)
         if not current(meta, now):
-            about.note("updates", False, "too old", at=meta["fetchedAt"])
-            print(
-                f"::warning::Updates digest: not used, it's from {meta['fetchedAt']}; "
-                "reading the logs per package",
-                file=sys.stderr,
+            digests.too_old(
+                "updates",
+                "Updates digest",
+                meta["fetchedAt"],
+                "; reading the logs per package",
             )
             return None
-        body = http.get_bytes(base + "attempts.jsonl.gz")
-        if body is None:
-            raise ValueError("its attempts.jsonl.gz is missing")
+        body = digests.download(base, "attempts.jsonl.gz")
         found = {}
         with gzip.open(io.BytesIO(body), "rt") as lines:
             for line in lines:
                 entry = json.loads(line)
                 found[entry.pop("attr")] = entry
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        about.note("updates", False, f"couldn't be read ({e})")
-        print(
-            f"::warning::Updates digest: couldn't use it ({e}); reading the logs "
-            "per package",
-            file=sys.stderr,
+    except digests.FAILURES as e:
+        digests.give_up(
+            "updates", "Updates digest", e, "; reading the logs per package"
         )
         return None
     print(
@@ -102,15 +94,18 @@ def load_queue(now):
     if not base:
         return None
     try:
-        body = http.get_bytes(base + "queue.json.gz")
+        body = digests.download(base, "queue.json.gz", missing_ok=True)
+        # No queue yet is no failure: the queue is only an extra.
         if body is None:
             about.note("queue", False, "the digest has no queue yet")
             return None
         queue = json.loads(gzip.decompress(body))
         made = datetime.fromisoformat(queue["updatedAt"])
-        if datetime.fromisoformat(now) - made > timedelta(
-            hours=config.UPDATES_QUEUE_MAX_AGE_HOURS
+        if digests.hours_since(queue["updatedAt"], now) > (
+            config.UPDATES_QUEUE_MAX_AGE_HOURS
         ):
+            # Noted, not warned of (not too_old): an old queue is just left
+            # out of the page.
             about.note("queue", False, "too old", at=queue["updatedAt"])
             return None
         cycle, positions = queue["cycleDays"], queue["positions"]
@@ -124,9 +119,8 @@ def load_queue(now):
             }
             for attr, entry in queue["queue"].items()
         }
-    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
-        about.note("queue", False, f"couldn't be read ({e})")
-        print(f"::warning::The bot's queue: couldn't use it ({e})", file=sys.stderr)
+    except (*digests.FAILURES, TypeError) as e:
+        digests.give_up("queue", "The bot's queue", e)
         return None
     about.note("queue", True, at=queue["updatedAt"], cycleDays=cycle)
     print(
