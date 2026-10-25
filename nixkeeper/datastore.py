@@ -35,7 +35,7 @@ from .changes import (
     on_branch,
     waiting_for_channel,
 )
-from .naming import SHARD_FILE, shard_of, slug
+from .naming import shard_of, slug
 from .sources import vulnerabilities_digest
 from .sources.nixpkgs import available_on
 
@@ -1003,10 +1003,17 @@ def write(
         kept: Files written as they are, {path: data}, what the sync keeps
             for its next run (nixpkgs' evaluations, views/merge.json); None
             for a file leaves it out.
+
+    Raises:
+        ValueError: A kept file is under rows/ or views/ but not in
+            SYNC_ONLY, before anything is written.
     """
+    check_kept(kept)
     out_dir = out_dir or config.OUT_DIR  # the setting now, not at import
     tmp_dir = out_dir + ".tmp"
-    restore_interrupted_swap(out_dir)  # its caller holds the lock
+    # Also done by lock.held; repeated here for callers, such as tests,
+    # that write without the lock.
+    restore_interrupted_swap(out_dir)
     shutil.rmtree(tmp_dir, ignore_errors=True)  # leftover from a failed run
     os.makedirs(tmp_dir)
     written = files(index, entries, history, fixed, events)
@@ -1071,8 +1078,9 @@ def update(index, entries, out_dir=None):
 
     The hourly checks change a few rows: only the files whose content
     changed are written, each written aside first so a failure never leaves
-    one half-written. Shards past the new shard count, left from a run
-    with more rows, are removed.
+    one half-written. The shards and views this run no longer writes, left
+    from a run with more rows or a view that has emptied since, are
+    removed, so the folder holds what a full write would leave.
 
     Args:
         index: The manifest, with every row in "packages".
@@ -1080,7 +1088,9 @@ def update(index, entries, out_dir=None):
         out_dir: The data folder (the configured one by default).
     """
     out_dir = out_dir or config.OUT_DIR  # the setting now, not at import
-    restore_interrupted_swap(out_dir)  # its caller holds the lock
+    # Also done by lock.held; repeated here for callers, such as tests,
+    # that write without the lock.
+    restore_interrupted_swap(out_dir)
     written = files(index, entries)
     _check_shape(written)
     for name, data in written.items():
@@ -1093,26 +1103,69 @@ def update(index, entries, out_dir=None):
         except OSError:
             pass
         _write_file(path, text)
-    _remove_extra_shards(out_dir, written["index.json"]["shardCount"])
+    _remove_files_no_longer_written(out_dir, written)
 
 
-def _remove_extra_shards(out_dir, count):
-    """Remove the shard files numbered count or more.
+# The view of the PRs maintainers can merge: written by the daily sync only
+# (with what it keeps, write's kept), so a partial run leaves it.
+MERGE_VIEW = "views/merge.json"
+# Every file the daily sync keeps under rows/ or views/ (write's kept): the
+# only ones there a partial run leaves although it doesn't write them.
+# write (check_kept) refuses a kept file there that isn't listed, so a new
+# one can't be deleted by every hourly check unnoticed.
+SYNC_ONLY = frozenset({MERGE_VIEW})
+# The folders a partial run tidies: only what files writes is there.
+GENERATED_FOLDERS = ("rows", "views")
 
-    Readers only open the shards the manifest's shardCount says, so those
-    are never read; removing them keeps the folder as a full write leaves
-    it.
+
+def check_kept(kept):
+    """Refuse a kept file in the generated folders that SYNC_ONLY doesn't list.
+
+    This raises, unlike the shape check (shape.py), which only reports: an
+    unlisted kept file is a mistake in nixkeeper's code, caught before any
+    data is lost, not a problem in the data.
+
+    Args:
+        kept: write's kept files, {path: data}.
+
+    Raises:
+        ValueError: A kept file under rows/ or views/ isn't in SYNC_ONLY:
+            the next partial run would delete it.
+    """
+    for path in kept or {}:
+        if path.split("/")[0] in GENERATED_FOLDERS and path not in SYNC_ONLY:
+            raise ValueError(
+                f"{path} is kept by the sync but isn't in datastore.SYNC_ONLY: "
+                "the hourly checks would delete it. Add it there."
+            )
+
+
+def _remove_files_no_longer_written(out_dir, written):
+    """Remove the files under rows/ and views/ a partial run no longer writes.
+
+    A view with no rows isn't written, so a view that has emptied since the
+    last sync would otherwise keep its old rows on disk while the manifest
+    says 0; and a shard past the shard count would stay when there are
+    fewer rows. A leftover <file>.tmp, from a write that died, goes too.
+    The files in SYNC_ONLY, which only the daily sync writes, are kept, and
+    so is everything outside those folders (evaluations.json, history.json).
+    Folders left empty are removed, except rows/ and views/ themselves, as
+    a full write wouldn't make them.
 
     Args:
         out_dir: The data folder.
-        count: The number of shards the data now has.
+        written: The files this run wrote, as files builds them.
     """
-    rows_dir = os.path.join(out_dir, "rows")
-    for name in os.listdir(rows_dir) if os.path.isdir(rows_dir) else []:
-        # SHARD_FILE matches a shard's path in data/, as the checks see it.
-        shard = SHARD_FILE.fullmatch(f"rows/{name}")
-        if shard and int(shard.group(1)) >= count:
-            os.remove(os.path.join(rows_dir, name))
+    for folder in GENERATED_FOLDERS:
+        top = os.path.join(out_dir, folder)
+        # Bottom up, so a folder is seen after its files are removed.
+        for root, _, names in os.walk(top, topdown=False):
+            for name in names:
+                path = os.path.relpath(os.path.join(root, name), out_dir)
+                if path not in written and path not in SYNC_ONLY:
+                    os.remove(os.path.join(root, name))
+            if root != top and not os.listdir(root):
+                os.rmdir(root)
 
 
 def _load(path):
