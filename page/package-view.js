@@ -5,6 +5,7 @@
 // (app.js's panelPage): a package's address, and hiding it.
 
 import {
+  capitalized,
   communityCheck,
   comparedRepos,
   compareVersions,
@@ -24,6 +25,7 @@ import {
   shortAge,
   targetVersion,
   waitingForChannel,
+  withoutLeadingJoiner,
 } from './logic.js';
 import {
   backportNote,
@@ -347,11 +349,7 @@ export function fillUpdate(pkg, el) {
       <span class="pd-verdict ${tone}">${o.label(u)}</span>
       <dl class="pd-facts">${facts.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
     </div>
-    ${
-      because?.restates
-        ? ''
-        : html`<p class="pd-text">${String(text).charAt(0).toUpperCase()}${raw(String(text).slice(1))}.</p>`
-    }${
+    ${because?.restates ? '' : html`<p class="pd-text">${capitalized(text)}.</p>`}${
       because?.report
         ? Date.now() - new Date(day).getTime() <= REPORT_DAYS * DAY_MS
           ? html`<p class="pd-text">Worth telling <a class="files-link" href="https://github.com/NixOS/nixpkgs-update/issues" target="_blank" rel="noopener">nixpkgs-update's maintainers ↗</a>, if no one has yet.</p>`
@@ -455,10 +453,7 @@ export function fillDetail(pkg, el, entries, page) {
       : '';
   // The sentence after the verdict, without "nixpkgs unstable has 1.3.5"
   // (the row says the version): what came after it, as a sentence of its own.
-  const opening = (tail) => {
-    const text = String(tail).replace(/^\s*(—|,|;)\s*/, '');
-    return raw(/^[a-z]/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text);
-  };
+  const opening = (tail) => capitalized(withoutLeadingJoiner(tail));
   const homepage = safeUrl(pkg.homepage);
 
   const st = computeStatus(pkg);

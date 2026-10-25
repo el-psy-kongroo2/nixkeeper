@@ -73,7 +73,15 @@ happen. For what nixkeeper does and how to set up your own, see the
   no build step: `index.html` preloads each (`modulepreload`), so a new
   module goes there too. `favicon*.svg` (the mark, and the live status icons
   the page switches between), `nixkeeper-lockup-tight*.svg` (the header) and
-  `tokens.css` are copies from `assets/brand/`, written by `nix run .#brand`
+  `tokens.css` are copies from `assets/brand/`, written by `nix run .#brand`.
+  `logic.js` also holds the page's HTML helpers:
+  - `html`: a template tag that escapes every value except markup made
+    with `html` itself
+  - `raw`: markup the page writes itself, never text from the data
+  - `capitalized`: capitalizes a text's first letter, keeping it escaped
+    (the names in `LOWERCASE_NAMES`, nixkeeper's and nixpkgs', stay lowercase)
+  - `withoutLeadingJoiner`: takes the joining punctuation ("— ", ", ") off
+    a sentence's tail, keeping it escaped
 - `assets/`:
   - `brand/`: nixkeeper's identity: the guide (`BRAND.md`), the mark and
     its variants, status versions and lockups as SVGs, the colour tokens
