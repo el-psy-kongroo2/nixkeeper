@@ -305,6 +305,45 @@ class Facts(unittest.TestCase):
         self.assertNotIn("dropPR", wine)
 
 
+class OtherPRs(unittest.TestCase):
+    """A PR touching several of a row's names, merged into one list."""
+
+    def test_every_copys_facts_whatever_the_order(self):
+        # "segger-jlink: drop" touches segger-jlink and segger-jlink-headless:
+        # only the title's package's copy says it's a removal (facts). The
+        # row covers both, and a set's order changes between processes.
+        full = {"number": 1, "title": "a: drop", "kind": "drop", "proposed": "x"}
+        touched = {"number": 1, "title": "a: drop"}
+        open_prs = {"a": [full], "a-headless": [touched]}
+        for keys in (["a", "a-headless"], ["a-headless", "a"]):
+            with self.subTest(keys=keys):
+                self.assertEqual(
+                    prs_digest._other_prs(open_prs, keys, set()), {1: full}
+                )
+
+    def test_a_row_covering_both_names_keeps_its_removal(self):
+        # What users saw: segger-jlink's "being removed" PR came and went.
+        digest = {
+            "facts": {
+                "prs": {},
+                "fixes": {},
+                "issues": {},
+                "open": {
+                    "a": [{"number": 1, "title": "a: drop", "kind": "drop"}],
+                    "a-headless": [{"number": 1, "title": "a: drop"}],
+                },
+            }
+        }
+        row = {"name": "a", "attrs": ["a", "a-headless"]}
+        prs_digest.add_facts([row], digest)
+        self.assertEqual(row["dropPR"], {"number": 1, "title": "a: drop"})
+        self.assertEqual(row["otherPRs"][0]["kind"], "drop")
+
+    def test_the_prs_already_said_left_out(self):
+        open_prs = {"a": [{"number": 1, "title": "a: 1 -> 2"}]}
+        self.assertEqual(prs_digest._other_prs(open_prs, ["a"], {1}), {})
+
+
 class BuildFixPRs(unittest.TestCase):
     MERGED = [
         {

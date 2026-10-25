@@ -439,7 +439,10 @@ def add_facts(rows, digest):
         pr = row.get("openPR")
         if pr and (theirs := found["prs"].get(pr["number"])):
             pr["facts"] = dict(theirs)
-        keys = {package_key(a) for a in [row["name"], *(row.get("attrs") or [])]}
+        # Sorted, so every loop over them goes in the same order in every run.
+        keys = sorted(
+            {package_key(a) for a in [row["name"], *(row.get("attrs") or [])]}
+        )
         # The update PR is said once: as the update PR, which touches the
         # failing build too, not again among the fixes.
         if pr and any(
@@ -450,7 +453,7 @@ def add_facts(rows, digest):
             pr.setdefault("facts", {})["fixesBuild"] = True
         for field, source in (("fixPRs", "fixes"), ("issueChecks", "issues")):
             items, seen = [], {pr["number"]} if pr and field == "fixPRs" else set()
-            for key in sorted(keys):
+            for key in keys:
                 for item in found[source].get(key, []):
                     if item["number"] not in seen:
                         seen.add(item["number"])
@@ -460,11 +463,7 @@ def add_facts(rows, digest):
         # Its other open PRs: not the update PR nor the fixes (said above).
         said = {pr["number"]} if pr else set()
         said |= {fix["number"] for fix in row.get("fixPRs") or []}
-        others = {}
-        for key in keys:
-            for item in found.get("open", {}).get(key, []):
-                if item["number"] not in said:
-                    others[item["number"]] = item
+        others = _other_prs(found.get("open", {}), keys, said)
         ordered = sorted(
             others.values(), key=lambda p: (p.get("kind") != "drop", -p["number"])
         )
@@ -487,6 +486,37 @@ def add_facts(rows, digest):
             if drop.get("proposed"):
                 # Only proposed (removal_proposed): no badge in the list.
                 row["dropPR"]["proposed"] = drop["proposed"]
+
+
+def _other_prs(open_prs, keys, said):
+    """Collect a row's other open PRs, once each, from its names' lists.
+
+    A PR touching several of the row's names is listed under each, and the
+    copies differ: facts gives "kind" and "proposed" only to the copy under
+    the package the PR's title names, so a removal isn't shown as removing
+    the other packages it touches. Every copy of a PR is merged, in the
+    names' sorted order, so a fact one copy has is kept and the result
+    doesn't depend on any order. The copies differ only by the facts one
+    leaves out; were a field to differ, the last name's copy would win. It
+    once kept the last copy met in a set, whose order changes from one run
+    to the next, and segger-jlink (with segger-jlink-headless) lost and
+    regained its "being removed" PR between syncs (2026-10-25).
+
+    Args:
+        open_prs: The digest's open PRs by package (facts' "open").
+        keys: The row's names (package_key), in any order: sorted here.
+        said: The numbers of the PRs already shown (the update PR, the fixes).
+
+    Returns:
+        {number: PR}, each PR's copies merged into one.
+    """
+    others = {}
+    for key in sorted(keys):
+        for item in open_prs.get(key, []):
+            number = item["number"]
+            if number not in said:
+                others[number] = {**others.get(number, {}), **item}
+    return others
 
 
 def recent(at, now):
@@ -744,7 +774,10 @@ def build_fix_prs(rows, merged, previous):
             and b["version"] != b["lastSuccessVersion"]
         }
         since = row.get("failingSince") or ""
-        keys = {package_key(a) for a in [row["name"], *(row.get("attrs") or [])]}
+        # Sorted, so every loop over them goes in the same order in every run.
+        keys = sorted(
+            {package_key(a) for a in [row["name"], *(row.get("attrs") or [])]}
+        )
         found, causes = [], []
         for key in keys:
             for pr in touching.get(key, []):
