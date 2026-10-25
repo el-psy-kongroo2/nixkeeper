@@ -31,7 +31,7 @@ def page_dir():
 
 
 def _data_dir():
-    data = config.OUT_DIR
+    data = config.data_dir()
     if not os.path.exists(os.path.join(data, "index.json")):
         sys.exit(f"No data in {data} yet: run `nixkeeper sync` first.")
     return data
@@ -95,7 +95,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 def server(port, bind, page=None, data=None):
     """An HTTP server for the page and data (not yet serving)."""
     handler = functools.partial(
-        _Handler, page=page or page_dir(), data=os.path.abspath(data or config.OUT_DIR)
+        _Handler, page=page or page_dir(), data=os.path.abspath(config.data_dir(data))
     )
     return http.server.ThreadingHTTPServer((bind, port), handler)
 
@@ -103,10 +103,10 @@ def server(port, bind, page=None, data=None):
 def serve(port, bind):
     """Serve until stopped. Without data yet, the page says it can't find
     any until a sync writes it (so it can be started before the first one)."""
-    if not os.path.exists(os.path.join(config.OUT_DIR, "index.json")):
+    data = config.data_dir()
+    if not os.path.exists(os.path.join(data, "index.json")):
         print(
-            f"No data in {config.OUT_DIR} yet: the page shows it once "
-            "`nixkeeper sync` has run.",
+            f"No data in {data} yet: the page shows it once `nixkeeper sync` has run.",
             file=sys.stderr,
         )
     httpd = server(port, bind)
