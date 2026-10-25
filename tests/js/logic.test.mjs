@@ -12,6 +12,7 @@ import {
   botWontUpdate,
   buildFailedBecause,
   buildsWith,
+  capitalized,
   communityCheck,
   comparedRepos,
   compareVersions,
@@ -81,6 +82,7 @@ import {
   vulnSummary,
   waitingForChannel,
   weekChange,
+  withoutLeadingJoiner,
   withRunStamps,
   withSlash,
 } from '../../page/logic.js';
@@ -665,6 +667,53 @@ describe('links and markup from data', () => {
   test('html joins arrays, and leaves out null and undefined only', () => {
     assert.equal(String(html`${['<a>', html`<b>`]}`), '&lt;a&gt;<b>');
     assert.equal(String(html`${null}${undefined}|${0}|${false}`), '|0|false');
+  });
+  test('capitalized escapes text, and keeps markup made with html', () => {
+    // A plain string from the data is escaped, whatever it holds.
+    assert.equal(String(capitalized('failed: <img src=x>')), 'Failed: &lt;img src=x&gt;');
+    assert.equal(String(html`<p>${capitalized('<b>x</b>')}</p>`), '<p>&lt;b&gt;x&lt;/b&gt;</p>');
+    // Markup's own tags are passed over: no "&lt;span" (the old display bug).
+    assert.equal(
+      String(capitalized(html`<span class="mono">failed</span> trying`)),
+      '<span class="mono">Failed</span> trying',
+    );
+    assert.equal(String(capitalized(html`opened ${'<x>'}`)), 'Opened &lt;x&gt;');
+    // Nothing to capitalize: as it was.
+    assert.equal(String(capitalized('1.2 is out')), '1.2 is out');
+    assert.equal(String(capitalized('Already')), 'Already');
+    assert.equal(String(capitalized(null)), '');
+  });
+  test('capitalized passes over quoted ">", knows any letter, and leaves what it must', () => {
+    // A tag whose attribute holds a ">": the letter after the tag.
+    assert.equal(
+      String(capitalized(html`<span title="${'a>b'}">x</span>`)),
+      '<span title="a&gt;b">X</span>',
+    );
+    assert.equal(
+      String(capitalized(raw('<span title="a>b">x</span>'))),
+      '<span title="a>b">X</span>',
+    );
+    // Text starting with a space is a sentence's tail: left as it is.
+    assert.equal(String(capitalized(' then failed')), ' then failed');
+    // The project's name stays lowercase, as its brand guide says.
+    assert.equal(String(capitalized('nixkeeper found it')), 'nixkeeper found it');
+    assert.equal(String(capitalized(html`<b>nixkeeper</b> found`)), '<b>nixkeeper</b> found');
+    // Letters beyond a to z.
+    assert.equal(String(capitalized('über')), 'Über');
+  });
+  test('withoutLeadingJoiner takes the joining punctuation off, still escaped', () => {
+    assert.equal(String(withoutLeadingJoiner(' — <b>x</b>')), '&lt;b&gt;x&lt;/b&gt;');
+    assert.equal(String(withoutLeadingJoiner(html`, but <i>${'<y>'}</i>`)), 'but <i>&lt;y&gt;</i>');
+    assert.equal(String(withoutLeadingJoiner('no joiner')), 'no joiner');
+  });
+  test('capitalized leaves the lowercase names, as whole words only', () => {
+    assert.equal(String(capitalized('nixkeeper found it')), 'nixkeeper found it');
+    assert.equal(String(capitalized('nixkeeperish')), 'Nixkeeperish');
+    // nixpkgs' names too, as the page's own sentences write them.
+    assert.equal(String(capitalized("nixpkgs won't build it")), 'nixpkgs won&#39;t build it');
+    assert.equal(String(capitalized('nixpkgs-update tried')), 'nixpkgs-update tried');
+    assert.equal(String(capitalized('r-ryantm opened it')), 'r-ryantm opened it');
+    assert.equal(String(capitalized('nixpkgsfoo')), 'Nixpkgsfoo');
   });
 });
 

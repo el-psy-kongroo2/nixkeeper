@@ -486,6 +486,89 @@ class Data(unittest.TestCase):
         self.assertEqual(names, ["rPackages.u", "t"])
         self.assertEqual(self.read("index.json")["views"]["superseded"], 2)
 
+    def test_a_partial_run_removes_a_view_it_no_longer_writes(self):
+        """A view that empties between syncs (its last PR to close gone, in
+        an hourly check) isn't written: its old file is removed, while the
+        view only the daily sync writes (datastore.MERGE_VIEW) stays."""
+        pr = {"number": 1, "title": "t: 0.5 -> 0.12", "now": "0.12"}
+        datastore.write(
+            {
+                "checkedAt": NOW,
+                "allPackages": True,
+                "packages": [row("t", supersededPRs=[pr])],
+            },
+            {},
+            self.out,
+            kept={datastore.MERGE_VIEW: {"checkedAt": NOW, "prs": []}},
+        )
+        self.assertTrue(os.path.exists(os.path.join(self.out, "views/superseded.json")))
+        datastore.update(
+            {"checkedAt": NOW, "allPackages": True, "packages": [row("t")]},
+            {},
+            self.out,
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.out, "views/superseded.json"))
+        )
+        self.assertTrue(os.path.exists(os.path.join(self.out, datastore.MERGE_VIEW)))
+        self.assertEqual(self.read("index.json")["views"]["superseded"], 0)
+
+    def test_a_partial_run_keeps_what_isnt_generated(self):
+        """Outside rows/ and views/, nothing is removed (evaluations.json,
+        kept by the sync); a leftover .tmp and an emptied folder are."""
+        rows = [row("t", teams=["Gaming"])]
+        datastore.write(
+            {"checkedAt": NOW, "allPackages": True, "packages": rows},
+            {},
+            self.out,
+            kept={"evaluations.json": {"kept": 1}},
+        )
+        with open(os.path.join(self.out, "rows", "0.json.tmp"), "w") as f:
+            f.write("a write that died")
+        self.assertTrue(os.path.isdir(os.path.join(self.out, "views", "team")))
+        datastore.update(
+            {"checkedAt": NOW, "allPackages": True, "packages": [row("t")]},
+            {},
+            self.out,
+        )
+        self.assertTrue(os.path.exists(os.path.join(self.out, "evaluations.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.out, "rows", "0.json.tmp")))
+        self.assertFalse(os.path.exists(os.path.join(self.out, "views", "team")))
+
+    def test_a_kept_file_in_the_generated_folders_must_be_registered(self):
+        """A file the sync keeps under views/ that SYNC_ONLY doesn't list
+        would be deleted by every hourly check: write refuses it, before
+        writing anything."""
+        with self.assertRaisesRegex(ValueError, "views/close.json .*SYNC_ONLY"):
+            datastore.write(
+                {"checkedAt": NOW, "allPackages": True, "packages": [row("t")]},
+                {},
+                self.out,
+                kept={"views/close.json": {"prs": []}},
+            )
+        self.assertFalse(os.path.exists(self.out))
+        # The sync's own kept files pass: every one it keeps (kept_files),
+        # so a new one added there without SYNC_ONLY fails here, in CI.
+        run = sync.Run(
+            now=NOW,
+            nixpkgs={},
+            lists={},
+            previous={},
+            revision="r",
+            everything=True,
+            listed={},
+            bulk={},
+            tracked=[],
+            bulk_attrs=set(),
+        )
+        datastore.check_kept(sync.kept_files(run, []))
+        datastore.write(
+            {"checkedAt": NOW, "allPackages": True, "packages": [row("t")]},
+            {},
+            self.out,
+            kept={datastore.MERGE_VIEW: {"prs": []}, "evaluations.json": {}},
+        )
+
     def test_set_bar_each_package_at_its_worst(self):
         def r(name, **more):
             return row(f"rPackages.{name}", set="rPackages", **more)

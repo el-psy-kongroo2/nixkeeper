@@ -8,9 +8,16 @@ happen. For what nixkeeper does and how to set up your own, see the
 
 - `nixkeeper/`: the sync and the hourly checks, as a Python package (see
   [The code](#the-code))
-- `tests/`: offline tests, one file per module (nothing reaches the
-  network: sources are faked). `tests/js/` tests the page's rules
-  (`page/logic.js`) with Node's own test runner
+- `tests/`: offline tests, one file per module (nothing reaches the network:
+  sources are faked). `tests/js/` tests the page's rules (`page/logic.js`),
+  a package panel's sections (`page/panel.js`), how it reads its data
+  (`page/data.js`, with `fetch` stood in for), its address
+  (`page/state.js`), a package's panel (`page/package-view.js`, the parts
+  that are HTML), the overview (`page/overview.js`), a maintainer's page
+  (`page/maintainer-view.js`), what the list keeps (`page/filters.js`), the
+  list's rows and cells (`page/list.js`), the views' controls (wired onto
+  stand-in elements) and the search box's query (`page/search.js`) with
+  Node's own test runner
 - `nix/package.nix`: nixkeeper's package, in nixpkgs' by-name style (the
   flake builds it from the checkout; see [Releasing](#releasing))
 - `nix/module.nix`: the NixOS module (`nixosModules.default`).
@@ -35,10 +42,46 @@ happen. For what nixkeeper does and how to set up your own, see the
 - `page/`: the page (`index.html`, `app.js`, `style.css`), reading `data/`
   from the `data` branch. `logic.js` holds its rules (statuses, versions,
   ages, safe links, the tab icon's signals) without the page, so they can be
-  tested; `app.js` imports it and draws the page. `favicon*.svg` (the mark, and the live status
-  icons the page switches between), `nixkeeper-lockup-tight*.svg` (the
-  header) and `tokens.css` are copies from
-  `assets/brand/`, written by `nix run .#brand`
+  tested; `overview.js` the overview (the cards, trends, causes, sets,
+  fixes, nixpkgs in numbers); `maintainer-view.js` a maintainer's or team's
+  page (You can merge these, Can be closed) and the maintainers page;
+  `package-view.js` a package's panel (Details, Updates, Builds), given what
+  it needs of the page (`panelPage` in `app.js`: a package's address, hiding
+  it, drawing again); `panel.js` its sections (vulnerabilities, builds, On
+  GitHub), from the package alone, tested too; `ui.js` the small pieces of
+  HTML and text they and the list share (numbers, dates, icons, why a build
+  failed); `data.js` where the data is and how it's read (its files as JSON,
+  the shards' rows once each); `state.js` the filters, sort and paging in
+  one object (`state`), read from the address and written back (`readState`,
+  `writeState`), and a view's address (`scopeHref`, with the tables `app.js`
+  gives it in `known`); `list.js` the list (its header with the tiles,
+  refines and facets, Your packages and Your team, each row and its cells,
+  where the data is from); `filters.js` what the list keeps (the tiles'
+  filters, refines, sorts, platforms, and the list worked out with them);
+  `search.js` the search box as a query (`is:builds on:darwin`: parseQuery,
+  writeQuery, needsList: the words that open a list from the overview,
+  matchNote: what status: and ofteam: wait for) and
+  its menu (suggest, wireSearchMenu; the values and counts
+  from list.js's searchValues); `prefs.js` what this browser keeps (localStorage, the rows
+  hidden here); `store.js` what's loaded of the data, in one object
+  (`store`); `timing.js` each redraw's parts, with `?debug=timing`;
+  `app.js` imports them, changes the state, fills the store and
+  draws the page. Each view wires its own controls (`wireList`,
+  `wireOverview`, `wireMaintainerView`), given what they need of the page
+  (`pageHooks` in `app.js`); `app.js` keeps the search box's listeners, the
+  links between views, the theme menu and the keyboard. Native ES modules,
+  no build step: `index.html` preloads each (`modulepreload`), so a new
+  module goes there too. `favicon*.svg` (the mark, and the live status icons
+  the page switches between), `nixkeeper-lockup-tight*.svg` (the header) and
+  `tokens.css` are copies from `assets/brand/`, written by `nix run .#brand`.
+  `logic.js` also holds the page's HTML helpers:
+  - `html`: a template tag that escapes every value except markup made
+    with `html` itself
+  - `raw`: markup the page writes itself, never text from the data
+  - `capitalized`: capitalizes a text's first letter, keeping it escaped
+    (the names in `LOWERCASE_NAMES`, nixkeeper's and nixpkgs', stay lowercase)
+  - `withoutLeadingJoiner`: takes the joining punctuation ("— ", ", ") off
+    a sentence's tail, keeping it escaped
 - `assets/`:
   - `brand/`: nixkeeper's identity: the guide (`BRAND.md`), the mark and
     its variants, status versions and lockups as SVGs, the colour tokens
@@ -75,6 +118,15 @@ happen. For what nixkeeper does and how to set up your own, see the
 
 `nixkeeper/cli.py` is the `nixkeeper` command: it reads the flags and runs
 the subcommand's module. `nixkeeper/sync.py` runs one sync, top to bottom:
+its `main()` calls a function per phase (`start`, `repology`,
+`own_sources_and_lists`, `update_checks`, `builds`, `update_bot`,
+`github_and_staging`, `vulnerabilities_and_fixes`, `write`,
+`notify_changes`: the names its log times them by), each given the `Run`
+(made once by `start`: the time, the channel's index and revision, the
+lists, the last run, what's tracked) and, once the rows exist, the `Scope`
+(which rows each step covers: the lists' apart from the rest with every
+package). What only an instance of every package writes is
+`every_package_outputs`'. The steps, and their modules:
 
 | Step | Module |
 |---|---|
@@ -89,7 +141,7 @@ the subcommand's module. `nixkeeper/sync.py` runs one sync, top to bottom:
 | where nixpkgs marks them broken, and Hydra's builds | `sources/nixpkgs.py`, `sources/hydra.py` |
 | the nixpkgs-update bot's latest attempts | `sources/nixpkgs_update.py` |
 | open PR and issue counts, and update PRs | `sources/github.py` |
-| write `data/` | `output.py` |
+| check `data/` against its shape, then write it | `shape.py`, `datastore.py` |
 | rewrite the status issue, commenting on what's newly wrong | `notify.py`, `changes.py` |
 
 Around that:
@@ -103,8 +155,29 @@ Around that:
   shipped in the package like the page): opting in, merging with the lists'
   own, and the limits community rules are held to (with `sources/http.py`'s
   safe mode)
+- `datastore.py`: writing and reading `data/`. A full sync builds a new
+  folder and swaps it in (`write`); the hourly checks rewrite only the
+  files that changed and remove those under `rows/` and `views/` they no
+  longer write (`update`). A file the daily sync keeps there besides
+  those (`sync.kept_files`, such as `views/merge.json`) must be listed in
+  `SYNC_ONLY`, or the hourly checks would delete it: `write` refuses one
+  that isn't, and a test checks every file `sync.kept_files` keeps
 - `lock.py`: one run at a time on a data folder (`<data dir>.lock`), for
-  every command that writes or copies the data
+  every command that writes or copies the data. Holding it is also when a
+  swap a run didn't finish is tidied up (`datastore.restore_interrupted_swap`):
+  reading the data (`datastore.load`) never changes the folder
+- `naming.py`: how the data's files are named (`slug` for a team's or list's
+  view, `shard_of` and `SHARD_FILE` for a row's shard), shared by
+  `datastore.py`, which writes them, and `shape.py`, which checks them
+- `timing.py`: how long each phase of a sync took (`Phases`: a `lap` after
+  each step of `sync.py`), in its log at the end, the longest first
+- `shape.py`: what `data/` must look like, checked before each write (the
+  sync's and the hourly checks'). It never raises on bad data, which is
+  what it looks for, and a fault in the check itself is logged without
+  stopping the write: a row's fields and their types (`ROW`:
+  a field added to the rows is added there and to `docs/data.md`, which a
+  test holds to it), and the manifest's counts against the views they
+  count. For now its problems are reported in the log (`Data shape: ...`)
 - `page.py`: `nixkeeper page` and `nixkeeper serve`. The package carries the
   page: its build copies `page/` into `nixkeeper/page/` (and links it as
   `share/nixkeeper/www/`); from a checkout, `page/` itself
@@ -137,6 +210,12 @@ nix run .#brand           # regenerate assets/brand/ and the page's favicon
 
 New files must be `git add`ed before Nix sees them.
 
+Where the time goes: a sync's log ends with its phases, the longest first
+(`Phases: 1 min 17 s in all`, then each one's time and share). The page
+logs each redraw's parts in the browser's console with `?debug=timing` in
+its address (`update 46 ms: view 0, browser 0, filter 5, ..., header 23,
+rows 11`; "browser": the page yielding to it between parts).
+
 The package lists and the community rules (update checks, ignore and
 up-to-date rules) are kept sorted by `nix fmt` (keep-sorted), so a
 package's rule is easy to find: add an entry anywhere between the
@@ -156,6 +235,41 @@ different. The PR template has this as a checklist.
 
 Security problems go through the [security policy](SECURITY.md), not a
 public issue.
+
+### Comments, docstrings and commit titles
+
+Write them for someone who doesn't know nixkeeper yet, in plain, full
+sentences.
+
+- A docstring starts with a one-line summary of what the function does,
+  then a blank line and any details. When the arguments or the result
+  aren't obvious from the names, describe them under `Args:` and
+  `Returns:` (and `Raises:`, when it raises on purpose).
+- A comment explains why: a constraint, an order that matters, a case
+  that isn't obvious. Don't restate what the next line does.
+- Name things in the comment as the code names them (`shown`, the
+  attention view), not by shorthand.
+- Commit and PR titles follow nixpkgs: `<area>: <what changed>`, with the
+  change said plainly (`search: parse the box once per value`, not
+  `typing works out less`). Every commit ends with an `Assisted-by:` line
+  when an AI assistant helped.
+
+For example, from `nixkeeper/shape.py`:
+
+```python
+def row_problems(row):
+    """Check one row's fields against ROW.
+
+    Args:
+        row: The row, as a dict.
+
+    Returns:
+        A list of sentences, one per problem, empty when there are none.
+    """
+```
+
+Older code is being rewritten to this style module by module; new and
+changed code follows it already.
 
 ## Screenshots
 

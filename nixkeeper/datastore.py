@@ -20,10 +20,11 @@ import math
 import os
 import re
 import shutil
-import zlib
+import sys
+import traceback
 from datetime import UTC, datetime, timedelta
 
-from . import causes, config
+from . import causes, config, shape
 from . import rows as rows_module
 from .changes import (
     broken_builds,
@@ -34,6 +35,7 @@ from .changes import (
     on_branch,
     waiting_for_channel,
 )
+from .naming import shard_of, slug
 from .sources import vulnerabilities_digest
 from .sources.nixpkgs import available_on
 
@@ -77,12 +79,6 @@ def shard_count(rows):
     """How many shards for rows: about SHARD_ROWS a shard, rounded up to a
     power of two (1 for a few hundred, 256 for all of nixpkgs)."""
     return 1 << max(0, math.ceil(math.log2(max(1, rows / SHARD_ROWS))))
-
-
-def shard_of(name, count):
-    """The shard a row is in: a stable hash of its name, so adding a package
-    changes only its own shard."""
-    return zlib.crc32(name.encode()) % count
 
 
 def elided(row, run):
@@ -556,12 +552,6 @@ def status(row):
     return letter + ("v" if is_vulnerable(row) else "")
 
 
-def slug(name):
-    """A team's or list's name as a file name: "Security review" ->
-    "security-review" (viewSlug in page/logic.js)."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-
-
 # The systems unbuilt_where looks at: each Linux system apart, Darwin as one.
 UNBUILT_KEYS = ("x86_64-linux", "aarch64-linux", "darwin")
 
@@ -970,36 +960,140 @@ def _write_file(path, text):
     os.replace(path + ".tmp", path)
 
 
+def _check_shape(written):
+    """Report what in the data doesn't match its description (shape.py).
+
+    The check only reports for now, so it must never stop a write: should
+    the check itself fail, that failure is logged too, and the write goes on.
+
+    Args:
+        written: The data about to be written, as files builds it.
+    """
+    try:
+        shape.report(shape.problems(written))
+    except Exception as e:  # reporting only: never stop a write
+        # Where in shape.py it broke, to find the bug without running it
+        # again: the innermost frame may be in a library it called.
+        frames = traceback.extract_tb(e.__traceback__)
+        frame = next(
+            (f for f in reversed(frames) if os.path.basename(f.filename) == "shape.py"),
+            frames[-1],
+        )
+        where = f"{os.path.basename(frame.filename)}:{frame.lineno}"
+        print(f"Data shape: the check itself failed at {where}: {e!r}", file=sys.stderr)
+
+
 def write(
     index, entries, out_dir=None, history=None, fixed=None, events=None, kept=None
 ):
-    """Write data/ for index and entries (files; history: the counts
-    history so far, read_history; fixed: the fixes to keep, with_fixed;
-    kept: {file: data} written as they are, None for none: what the sync
-    keeps for its next run, nixpkgs' evaluations, and views/merge.json).
-    Built from scratch in a temporary folder
-    and only then swapped in for out_dir, so removed packages disappear and
-    a failed run leaves the previous data intact."""
+    """Write the whole data folder for a sync, replacing the last one.
+
+    The new data is built in a folder of its own and only then swapped in,
+    so packages removed since the last sync disappear, and a run that
+    fails before the swap leaves the last data as it was.
+
+    Args:
+        index: The manifest, with every row in "packages".
+        entries: Repology's entries, by the rows' "dataFile".
+        out_dir: The data folder (the configured one by default).
+        history: The counts' history so far (read_history), with every
+            package; None leaves history.json out.
+        fixed: The fixes to keep (with_fixed).
+        events: What marks the trends (with_events).
+        kept: Files written as they are, {path: data}, what the sync keeps
+            for its next run (nixpkgs' evaluations, views/merge.json); None
+            for a file leaves it out.
+
+    Raises:
+        ValueError: A kept file is under rows/ or views/ but not in
+            SYNC_ONLY, before anything is written.
+    """
+    check_kept(kept)
     out_dir = out_dir or config.OUT_DIR  # the setting now, not at import
     tmp_dir = out_dir + ".tmp"
+    # Also done by lock.held; repeated here for callers, such as tests,
+    # that write without the lock.
+    restore_interrupted_swap(out_dir)
     shutil.rmtree(tmp_dir, ignore_errors=True)  # leftover from a failed run
     os.makedirs(tmp_dir)
-    for name, data in files(index, entries, history, fixed, events).items():
+    written = files(index, entries, history, fixed, events)
+    _check_shape(written)
+    for name, data in written.items():
         _write_file(os.path.join(tmp_dir, name), dumps(data))
     for name, data in (kept or {}).items():
         if data is not None:
             _write_file(os.path.join(tmp_dir, name), dumps(data))
-    shutil.rmtree(out_dir, ignore_errors=True)
-    os.rename(tmp_dir, out_dir)
+    _swap_in(tmp_dir, out_dir)
+
+
+def _swap_in(new_dir, out_dir):
+    """Replace the data folder with a new one.
+
+    The old folder is moved aside before the new one is moved in, rather
+    than deleted first: the data is then missing only between two renames,
+    not while a whole folder is deleted, and a run that dies between them
+    leaves the old data in <out_dir>.old, which restore_interrupted_swap
+    puts back.
+
+    Args:
+        new_dir: The new data folder, complete.
+        out_dir: The data folder it replaces.
+    """
+    old_dir = out_dir + ".old"
+    shutil.rmtree(old_dir, ignore_errors=True)
+    if os.path.exists(out_dir):
+        os.rename(out_dir, old_dir)
+    os.rename(new_dir, out_dir)
+    shutil.rmtree(old_dir, ignore_errors=True)
+
+
+def restore_interrupted_swap(out_dir=None):
+    """Tidy up after a swap that a run didn't finish.
+
+    Only to be called with the data folder's lock held (lock.held calls it):
+    it moves folders, and another run in the middle of _swap_in would then
+    see them change under it.
+
+    A run that died between _swap_in's two renames leaves no data folder
+    and the last data in <out_dir>.old: that data is moved back, so the run
+    that follows reads it as the previous run's. A run that died after
+    both renames leaves the data folder and a stale <out_dir>.old: the old
+    folder is removed.
+
+    Args:
+        out_dir: The data folder (the configured one by default).
+    """
+    out_dir = out_dir or config.OUT_DIR  # the setting now, not at import
+    old_dir = out_dir + ".old"
+    if not os.path.isdir(old_dir):
+        return
+    if os.path.exists(out_dir):
+        shutil.rmtree(old_dir, ignore_errors=True)
+    else:
+        os.rename(old_dir, out_dir)
 
 
 def update(index, entries, out_dir=None):
-    """Rewrite data/ in place for index and entries (files), only the files
-    whose content changed, each written aside first so a failure never
-    leaves one half-written. For partial runs (the hourly checks), which
-    change a few rows."""
+    """Rewrite the data folder in place, for a partial run.
+
+    The hourly checks change a few rows: only the files whose content
+    changed are written, each written aside first so a failure never leaves
+    one half-written. The shards and views this run no longer writes, left
+    from a run with more rows or a view that has emptied since, are
+    removed, so the folder holds what a full write would leave.
+
+    Args:
+        index: The manifest, with every row in "packages".
+        entries: Repology's entries, by the rows' "dataFile".
+        out_dir: The data folder (the configured one by default).
+    """
     out_dir = out_dir or config.OUT_DIR  # the setting now, not at import
-    for name, data in files(index, entries).items():
+    # Also done by lock.held; repeated here for callers, such as tests,
+    # that write without the lock.
+    restore_interrupted_swap(out_dir)
+    written = files(index, entries)
+    _check_shape(written)
+    for name, data in written.items():
         path = os.path.join(out_dir, name)
         text = dumps(data)
         try:
@@ -1009,6 +1103,69 @@ def update(index, entries, out_dir=None):
         except OSError:
             pass
         _write_file(path, text)
+    _remove_files_no_longer_written(out_dir, written)
+
+
+# The view of the PRs maintainers can merge: written by the daily sync only
+# (with what it keeps, write's kept), so a partial run leaves it.
+MERGE_VIEW = "views/merge.json"
+# Every file the daily sync keeps under rows/ or views/ (write's kept): the
+# only ones there a partial run leaves although it doesn't write them.
+# write (check_kept) refuses a kept file there that isn't listed, so a new
+# one can't be deleted by every hourly check unnoticed.
+SYNC_ONLY = frozenset({MERGE_VIEW})
+# The folders a partial run tidies: only what files writes is there.
+GENERATED_FOLDERS = ("rows", "views")
+
+
+def check_kept(kept):
+    """Refuse a kept file in the generated folders that SYNC_ONLY doesn't list.
+
+    This raises, unlike the shape check (shape.py), which only reports: an
+    unlisted kept file is a mistake in nixkeeper's code, caught before any
+    data is lost, not a problem in the data.
+
+    Args:
+        kept: write's kept files, {path: data}.
+
+    Raises:
+        ValueError: A kept file under rows/ or views/ isn't in SYNC_ONLY:
+            the next partial run would delete it.
+    """
+    for path in kept or {}:
+        if path.split("/")[0] in GENERATED_FOLDERS and path not in SYNC_ONLY:
+            raise ValueError(
+                f"{path} is kept by the sync but isn't in datastore.SYNC_ONLY: "
+                "the hourly checks would delete it. Add it there."
+            )
+
+
+def _remove_files_no_longer_written(out_dir, written):
+    """Remove the files under rows/ and views/ a partial run no longer writes.
+
+    A view with no rows isn't written, so a view that has emptied since the
+    last sync would otherwise keep its old rows on disk while the manifest
+    says 0; and a shard past the shard count would stay when there are
+    fewer rows. A leftover <file>.tmp, from a write that died, goes too.
+    The files in SYNC_ONLY, which only the daily sync writes, are kept, and
+    so is everything outside those folders (evaluations.json, history.json).
+    Folders left empty are removed, except rows/ and views/ themselves, as
+    a full write wouldn't make them.
+
+    Args:
+        out_dir: The data folder.
+        written: The files this run wrote, as files builds them.
+    """
+    for folder in GENERATED_FOLDERS:
+        top = os.path.join(out_dir, folder)
+        # Bottom up, so a folder is seen after its files are removed.
+        for root, _, names in os.walk(top, topdown=False):
+            for name in names:
+                path = os.path.relpath(os.path.join(root, name), out_dir)
+                if path not in written and path not in SYNC_ONLY:
+                    os.remove(os.path.join(root, name))
+            if root != top and not os.listdir(root):
+                os.rmdir(root)
 
 
 def _load(path):

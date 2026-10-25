@@ -218,6 +218,94 @@ header.top {
 .search:focus-within kbd {
   display: none;
 }
+/* The box grows with the screen, and more when typed in: room for a
+   query (is:builds on:darwin ...), in the header's free space (beside the
+   wordmark, about 540px with the buttons), so its row doesn't wrap. */
+.search {
+  --search-rest: clamp(220px, 26vw, 340px);
+  position: relative;
+  width: var(--search-rest);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    width 0.15s;
+}
+.search:focus-within {
+  width: max(var(--search-rest), min(580px, 45vw, 100vw - 540px));
+}
+/* What the query couldn't read, under the box. */
+.search:has(input[aria-invalid="true"]) {
+  border-color: var(--danger);
+}
+/* The box's menu: the qualifiers, then their values, each with what it
+   does and (where counted) how many it keeps. */
+.search-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 6;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+/* With a problem said, the menu goes under it. */
+/* What a word waits for (a name): quieter, and only while typed in. */
+.search-problems.note {
+  border-color: var(--hairline-strong);
+  color: var(--ink-soft);
+}
+.search:not(:focus-within) .search-problems.note {
+  display: none;
+}
+.search-problems:not([hidden]) ~ .search-menu {
+  top: calc(100% + 34px);
+}
+.search-option {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink);
+}
+.search-option[aria-selected="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.so-text {
+  font-family: var(--nk-font-mono);
+}
+.so-label {
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.so-count {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.search-problems {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding: 4px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .btn {
   text-decoration: none;
   display: inline-grid;
@@ -1003,56 +1091,13 @@ button.checked:focus-visible {
 .hl-all:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-/* The overview's search: large and centred, the team picker beside it. */
+/* The overview's team picker, centred under the cards (the top box is the
+   search). */
 .find {
   display: flex;
-  flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
-  width: min(100%, 720px);
+  width: min(100%, 360px);
   margin: 14px auto 10px;
-}
-.find-box {
-  position: relative;
-  flex: 3 1 320px;
-  display: flex;
-  align-items: center;
-}
-.find-icon {
-  position: absolute;
-  left: 14px;
-  display: flex;
-  color: var(--ink-faint);
-  pointer-events: none;
-}
-.find-input {
-  width: 100%;
-  height: 44px;
-  font: inherit;
-  font-size: 15px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--hairline-strong);
-  border-radius: 10px;
-  padding: 0 14px 0 40px;
-  box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent);
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
-}
-.find-input::placeholder {
-  color: var(--ink-faint);
-}
-.find-input:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline-strong));
-}
-.find-input:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
-}
-.find-box:focus-within .find-icon {
-  color: var(--accent);
 }
 .tiles {
   display: grid;
@@ -3138,7 +3183,8 @@ a.page-btn:focus-visible {
   }
   /* The box gives up room to the buttons (40px each on a touch screen),
      rather than pushing the last one past the screen's margin. */
-  .search {
+  .search,
+  .search:focus-within {
     flex: 1;
     width: auto;
     min-width: 0;

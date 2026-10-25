@@ -898,6 +898,46 @@ export function html(strings, ...values) {
 // Markup the page writes itself, as is. Never for text from the data.
 export const raw = (text) => new Markup(String(text));
 
+// A value as markup: an html template's kept as it is, anything else
+// escaped as html would.
+const asMarkup = (value) => (value instanceof Markup ? value : html`${value}`);
+
+// What capitalized passes over before the first letter: tags (a quoted
+// attribute value may hold a ">"). Any lowercase letter, not only a to z.
+// Whitespace isn't passed over: a text starting with a space is a tail of
+// a sentence ("... nixkeeper's update check found"), not its start.
+const BEFORE_FIRST_LETTER = /^((?:<(?:[^>"]|"[^"]*")*>)*)(\p{Ll})/u;
+// Names that stay lowercase even at a sentence's start, as their projects
+// write them: nixkeeper (assets/brand/BRAND.md), nixpkgs, and its update
+// bot's. The page's own sentences already start "nixpkgs-update hasn't
+// tried..." (package-view.js). Whole words only: \b keeps "nixpkgsfoo" out.
+// nixpkgs-update is listed though "nixpkgs" would match it already ("-"
+// ends a word), so the list says what it covers.
+const LOWERCASE_NAMES = /^(nixkeeper|nixpkgs|nixpkgs-update|r-ryantm)\b/;
+
+// Text with its first letter capitalized, as markup that's safe to show.
+// Tags at the start are passed over, so "<span>failed</span>" becomes
+// "<span>Failed</span>". A sentence starting with one of LOWERCASE_NAMES
+// is left as it is.
+export function capitalized(value) {
+  const markup = asMarkup(value).text;
+  return new Markup(
+    markup.replace(BEFORE_FIRST_LETTER, (match, before, letter) =>
+      LOWERCASE_NAMES.test(markup.slice(before.length)) ? match : before + letter.toUpperCase(),
+    ),
+  );
+}
+
+// The joining punctuation ("— ", ", ", "; ") a sentence's tail starts with.
+const LEADING_JOINER = /^\s*(—|,|;)\s*/;
+
+// A sentence's tail with its joining punctuation taken off, so it stands
+// as a sentence of its own, as markup that's safe to show. The text is
+// escaped first; only punctuation and spaces are taken off, never markup.
+export function withoutLeadingJoiner(value) {
+  return new Markup(asMarkup(value).text.replace(LEADING_JOINER, ''));
+}
+
 // Whether url's host is host or one of its subdomains (github.com, or
 // api.github.com), by its parsed hostname: not "github.com" anywhere in it
 // (https://example.org/?github.com). False for what isn't a URL.

@@ -11,6 +11,36 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Added
 
+- **Where the time goes**: a sync's log ends with how long each of its
+  phases took, the longest first (`Phases: 1 min 17 s in all`, then
+  `41 s 54% vulnerabilities, fixes, families`...), where only Hydra's time
+  was said before. And the page, with `?debug=timing` in its address, logs
+  each redraw's parts in the browser's console (`update 46 ms: view 0,
+  browser 0, filter 5, browser 0, stats 7, header 23, rows 11`).
+
+- **The sync checks its data before writing it**: each row's fields and
+  their types, against a table of every field (`nixkeeper/shape.py`), and
+  the manifest's counts against the views they count (the views' lengths,
+  the teams', lists' and sets', the build failures by platform as the page
+  counts them). What doesn't match is said in the log (`Data shape: 2
+  manifest problems`, then each: `counts.buildFailuresOn.darwin 769, the
+  view's 767`); for now it's only said, not stopping the sync. Today's
+  published data: none, of 126,364 rows (1.3 s).
+
+- **The search box holds the filters as words**, as GitHub's does:
+  `is:builds -is:broken age:1y on:linux build:compile wine`. The tiles,
+  chips and selects write them there; typing one sets it. Each word is the
+  address's own (`is:` a tile, `on:` a platform, `has:pr`, `age:1y`,
+  `team:`, `status:` for the matches in all of nixpkgs...); a word not
+  understood is said under the box with what was likely meant ("no
+  is:biulds: is:builds?"). Addresses are as before; `?q=` takes the words
+  too. The syntax in reading-the-page.md.
+- **A menu under the search box**, as GitHub's: on entering the box, or
+  after a space, the qualifiers (`is:`, `on:`, `age:`...); after one, its
+  values with how many packages each has (`is:builds` 1,242, `on:darwin`
+  636), teams and package sets included. Arrows move in it, Enter or Tab
+  picks, Escape closes it. The box is wider, and more so while typed in,
+  as the header has room.
 - **The update a build has failed since**: a failure at another version
   than it last built at says so in the builds panel, "at 1.2.4, since its
   update (#575734) · last built at 1.1.0", with the PR when nixkeeper-prs'
@@ -36,8 +66,114 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   fix only in a newer series than nixpkgs' says to check for a backport,
   and an older series kept beside a newer one (firefox-esr) gets none.
 
+### Changed
+
+- The page capitalizes the start of a sentence (a package's update
+  attempt, the line after its verdict) through one helper that escapes
+  plain text and keeps the page's own markup, rather than by hand around
+  `raw()`: a text taken from the data there can no longer reach the page
+  unescaped. Names written in lowercase stay so at a sentence's start
+  (nixkeeper, as its brand guide has it, nixpkgs, nixpkgs-update,
+  r-ryantm), as the page's own sentences already wrote them: the update
+  bot's reasons `patch` and `unavailable` now read "nixpkgs' changes to the
+  source..." and "nixpkgs won't build it...", not "Nixpkgs". Nothing else
+  the page shows changes (1,957 of 1,974 packages' panels rendered
+  identically; the other 17 by that one letter).
+
+- The sync's code reads as its phases: `sync.main` calls one function per
+  phase, named as the log times them, each from what the run works from
+  (made once) and which rows each step covers (worked out once), rather
+  than one function of 280 lines handing the same values to every step.
+  The data is the same: two syncs, before and after, run together, wrote
+  the same 5,401 files with every package, and the same 4 with one
+  maintainer's lists.
+
+- **The overview has one search box**, the one at the top (with its menu),
+  rather than a second one under the tiles: the team picker and "browse
+  every maintainer" stay there. Maintainers are found by handle on
+  "browse every maintainer", the box narrowing them as you type.
+- **A list's words on the overview open the list**: `is:builds` (or
+  `age:1y`, `has:pr`...) typed there opens what needs attention with it,
+  as its card does, rather than doing nothing; `team:` opens the team's
+  packages. A name and the words for the matches in all of nixpkgs
+  (`status:`, `ofteam:`, `on:`, `in:`, `by:`) keep the overview. So does
+  an old link such as `/?filter=builds`: it opens the list now.
+- **The search menu counts on the overview too**: `is:` as the cards
+  count (outdated 11,550, builds 1,231...), and after a name `status:`,
+  `ofteam:`, `in:` and `on:` with how many of the matches in all of
+  nixpkgs each keeps, as the matches' own selects (on every page for
+  `status:` and `ofteam:`).
+- **`ofteam:` with no name**: on the overview, the team's packages (as
+  `team:`); elsewhere, said under the box while typing ("ofteam: narrows
+  the matches in all of nixpkgs: add a name"), as for `status:`, rather
+  than doing nothing.
+- The page in modules: the overview in `page/overview.js`, a maintainer's
+  page in `page/maintainer-view.js`, the list in `page/list.js` and its
+  filters in `page/filters.js`, each view wiring its own controls, a
+  package's panel in `page/package-view.js`, its sections in `page/panel.js`
+  (pure, with node tests), shared pieces of HTML in `page/ui.js`, reading
+  the data in `page/data.js`, the filters, sort and paging in one object
+  with the address read and written in `page/state.js` (both with node
+  tests), what's loaded of the data in one object in `page/store.js`,
+  preloaded with `app.js`. Nothing on the page changes.
+
 ### Fixed
 
+- While a sync writes the data folder, the data is missing only for the
+  moment between two renames, rather than while the old folder is
+  deleted: the old data moves aside before the new moves in. A run that
+  dies between the two moves leaves the old data in `data.old`, and the
+  next run puts it back once it holds the folder's lock.
+- The hourly checks remove the shard files (`rows/<n>.json`) past the
+  data's shard count, left over when there are fewer rows than at the
+  last sync. Readers never opened them, but the folder now matches what a
+  full sync leaves.
+- The hourly checks also remove a view they empty (the last PR to close
+  gone, say): its old file stayed, still listing its old rows, while the
+  manifest counted 0, and the page could show them. The view of the PRs
+  maintainers can merge, written only by the daily sync, stays.
+
+- The data's shape check could stop a sync on the very mistakes it looks
+  for: a row without a name, a manifest without its counts, a view entry
+  or a build missing a field raised an error before anything was written.
+  It now reports each of them in the log (`rows/0.json, row 3: no name`),
+  and a fault in the check itself is logged too (`Data shape: the check
+  itself failed at shape.py:120: ...`) without stopping the write.
+
+- The data's shape check takes a null `nixVersion`, as a list entry
+  nixpkgs no longer has is written (`nixStatus` `missing`): its first sync
+  said `space-station-14-launcher: nixVersion is NoneType, not str`, the
+  gaming list's entry for a package nixpkgs renamed `ss14-launcher`
+  (NixOS/nixpkgs#576621). The gaming list names it so now, with the flake's
+  nixpkgs updated (2026-10-23) to know the name.
+
+- `docs/data.md` names `refFromPR` (a row's `refVersion` from an update
+  PR), which rows have had without it being described.
+
+- **Typing in the search box is light again**: the menu worked out every
+  qualifier's values, with counts over every package, at each key, click
+  and arrow (55 ms each over 13,913 packages); now one qualifier's when
+  it's typed, kept until the page is drawn again. A key that changes
+  nothing asked (`is:` before its value, a space) draws nothing, and the
+  list waits 250 ms (was 150) after the last key. Typing `is:builds f`
+  at 0.15 s a key: 22 long tasks, 6.9 s in all, before; 3, 0.25 s, after.
+- **Each redraw while typing is quicker too** (about 115 ms to under
+  50): the search box was parsed again for every package (the
+  maintainer's page filter asks for its text), and "Hide until it
+  changes" worked out every package's print to find the few hidden; now
+  the box is parsed once for each value, and a print only for a package
+  hidden here.
+- **One option highlighted in the search menu**: the pointer moves it, as
+  the arrows do, rather than one hovered and another picked by the keys
+  both looking selected.
+
+- **`ofteam:` in any case**: `ofteam:python` is the Python team's, as
+  `team:` already was, rather than matching nothing; a team that doesn't
+  exist is said under the box ("no ofteam:pyton: ofteam:Python?").
+
+- "Master already has 1.2.4 (..., built by Hydra)" only when Hydra's build
+  of it didn't fail: "failing to build on Hydra on x86_64-linux" (tgrep), or
+  "built by Hydra, but failing on ..." when it builds elsewhere.
 - PRs titled with tags before the package ("[26.05] libsidplayfp: ...",
   "[Backport release-26.05] ...", "[WIP] ...": 232 open) count for it, in
   **Open on GitHub** and for staging: 139 packages counted too few.
