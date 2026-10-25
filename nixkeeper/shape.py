@@ -15,10 +15,10 @@ lookup checks the type of what it reads and reports what doesn't fit
 (the Malformed tests hold it to that).
 """
 
-import sys
 from types import NoneType, UnionType
 from typing import NamedTuple, TypedDict, get_args, get_type_hints
 
+from . import log
 from .naming import SHARD_FILE, shard_of, slug
 
 
@@ -426,17 +426,19 @@ def _failing_on(entry, platform):
     )
 
 
-def report(found, out=sys.stderr):
-    """Write the problems to the log: how many of each kind, and the first few.
+def report(found):
+    """Say the problems in the log: how many of each kind, and the first few.
+
+    Each kind is one warning, the first few problems in it: an annotation
+    on GitHub Actions, which shows them on the run's page.
 
     Args:
-        found: The problems, as problems returns them. Nothing is written
-            when there are none.
-        out: Where to write them (standard error, the log, by default).
+        found: The problems, as problems returns them. Nothing is said when
+            there are none.
     """
     for kind, texts in found.items():
-        print(f"Data shape: {len(texts):,} {kind} problems", file=out)
-        for text in texts[:SHOWN]:
-            print(f"  {text}", file=out)
+        lines = [f"Data shape: {len(texts):,} {kind} problems"]
+        lines += [f"  {text}" for text in texts[:SHOWN]]
         if len(texts) > SHOWN:
-            print(f"  ... and {len(texts) - SHOWN:,} more", file=out)
+            lines.append(f"  ... and {len(texts) - SHOWN:,} more")
+        log.warn("\n".join(lines))

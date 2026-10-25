@@ -169,6 +169,14 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   hourly checks publish nothing on it until a full sync with this version
   has run (the manifest's `verdicts` says one has).
 
+- Outside GitHub Actions (a terminal, the NixOS module's journal), warnings
+  now read `warning: ...` instead of `::warning::...`, and notices
+  `notice: ...`; the journal files them as warnings and notices
+  (`journalctl -p warning -u nixkeeper-sync`). On GitHub Actions they're
+  annotations as before, now in full when the message is several lines
+  long (a Nix evaluation error), and problems the data check finds before
+  a write are one too.
+
 - **The overview has one search box**, the one at the top (with its menu),
   rather than a second one under the tiles: the team picker and "browse
   every maintainer" stay there. Maintainers are found by handle on

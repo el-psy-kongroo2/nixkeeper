@@ -205,6 +205,11 @@ UPSTREAM_URL = "https://github.com/nixkeeper/nixkeeper"
 CONTACT_MAX = 100  # characters of NIXKEEPER_CONTACT kept in the User-Agent
 
 
+def on_github_actions():
+    """Return whether this runs on GitHub Actions."""
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
 def user_agent():
     """Return the User-Agent header nixkeeper sends to every source.
 
@@ -220,11 +225,7 @@ def user_agent():
 
     who = []
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if (
-        os.environ.get("GITHUB_ACTIONS") == "true"
-        and repo
-        and not UPSTREAM_URL.endswith(f"/{repo}")
-    ):
+    if on_github_actions() and repo and not UPSTREAM_URL.endswith(f"/{repo}"):
         who.append(repo)
     contact = _comment_safe(os.environ.get("NIXKEEPER_CONTACT", ""))
     if contact:
