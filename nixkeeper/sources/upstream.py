@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from .. import community as community_rules
 from .. import config, history, schedule
+from ..shape import Row
 from ..versions import is_newer, version_key
 from . import github, http
 
@@ -94,7 +95,7 @@ def outdated_after(check):
     return {**OUTDATED_AFTER, **(check.get("outdatedAfter") or {})}
 
 
-def apply(row, found, decides=True):
+def apply(row: Row, found, decides=True):
     """Record an update check's result on its row.
 
     When upstream is ahead of nixpkgs, its version is also the one the row
@@ -214,7 +215,7 @@ def due(name, check, row, before, now):
 
 
 def add_checks(
-    rows, checks, previous, now, community=frozenset(), inferred=frozenset()
+    rows: list[Row], checks, previous, now, community=frozenset(), inferred=frozenset()
 ):
     """Run the update checks of the rows that have one.
 
@@ -245,7 +246,7 @@ def add_checks(
         for name, check in checks.items()
         if name in by_name and "follows" not in check
     }
-    failed = {}
+    failed: dict[str, str] = {}
     if not wanted:
         return failed
     before = {row["name"]: row for row in previous["packages"]}
