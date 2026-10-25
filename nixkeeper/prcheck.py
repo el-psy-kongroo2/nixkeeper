@@ -21,8 +21,8 @@ own only).
 import sys
 from datetime import UTC, datetime
 
-from . import follows, partial
-from .changes import count_prs, is_outdated
+from . import follows, partial, verdict
+from .changes import is_outdated
 from .sources import github, github_bulk, nixpkgs, nixpkgs_update, prs_digest
 from .tracking import MAINTAINED
 
@@ -60,7 +60,10 @@ def from_digest(rows, digest, revision, now):
 def main():
     """Run the PR check, and publish what changed."""
     now = datetime.now(UTC).isoformat()
-    previous, packages = partial.load()
+    loaded = partial.load()
+    if loaded is None:
+        return  # waiting for a full sync (partial.load says so)
+    previous, packages = loaded
     outdated = [row for row in packages if is_outdated(row)]
     if not outdated:
         print("Nothing outdated: no update PRs to look for.", file=sys.stderr)
@@ -125,9 +128,10 @@ def main():
                 pr["facts"] = before["facts"]
     # Packages that follow another (follows.py): the same PRs, as its own.
     follows.apply_prs(packages, follows.recorded(packages))
-    # Outdated with no newer version named: the newest its update PRs bring.
+    # Outdated with no newer version named: the newest its update PRs bring
+    # (verdict._update_prs).
     for row in outdated:
-        count_prs(row)
+        verdict.decide(row)
     # A merged PR can supersede a failed bot attempt before Hydra builds it.
     nixpkgs_update.recheck_superseded(outdated)
     partial.publish(previous, packages, now)
