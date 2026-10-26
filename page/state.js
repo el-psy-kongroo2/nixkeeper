@@ -5,16 +5,13 @@
 // selects, the search) and draws the page from it. Other parameters
 // (owner, repo) are left alone. And the rules that follow the selected
 // platform.
+import { NAME_STATUSES } from './facets.js';
+import { maintainersParam, parseMaintainers, parseTeams, teamsParam } from './people.js';
 import {
   buildsWith as buildsOn,
   hasFailure as failureOn,
-  maintainersParam,
-  NAME_STATUSES,
-  parseMaintainers,
-  parseTeams,
   attentionRank as rankOn,
-  teamsParam,
-} from './logic.js';
+} from './status.js';
 import { store } from './store.js';
 
 // The page's tables (FILTERS, SORTS, PLATFORMS, REFINES, AGES), by their
@@ -53,6 +50,24 @@ export const state = {
   matchTeam: null,
   pageNum: 1,
   pageSize: DEFAULT_PAGE_SIZE,
+};
+
+// The list's own state. The visitor's own GitHub handle, for "Your packages"
+// (kept in their browser only, nixkeeper-handle), how many packages list them
+// once their view is loaded, and whether it's being edited; their team
+// (nixkeeper-team), for "Your team", the same. Packages one update moves
+// together, folded into one row (foldFamilies): the folds of the list drawn
+// (lead's name → its fold), and the names shown behind an open one's lead.
+export const listView = {
+  myHandle: null,
+  myCount: null,
+  editingHandle: false,
+  myTeam: null,
+  editingTeam: false,
+  folds: new Map(),
+  inOpenFold: new Set(),
+  // The folds opened (by key, until reload).
+  openFolds: new Set(),
 };
 
 // The state an address says, and the search box's text (query), from its
@@ -152,7 +167,7 @@ export function writeState(st, query, params, { FILTERS, PLATFORMS }, page = st.
   return out ? `?${out}` : '';
 }
 
-// The rules that follow the platform filter (logic.js), on the selected one.
+// The rules that follow the platform filter (status.js), on the selected one.
 export const hasFailure = (pkg) => failureOn(pkg, state.platformFilter);
 
 export const buildsWith = (pkg, status) => buildsOn(pkg, status, state.platformFilter);
@@ -200,7 +215,7 @@ export function scopeHref({ set = null, pkg = null, view = null, filter = null, 
 // null, or a nixpkgs team (meta.teams, by its short name; any case):
 // ?team=gaming is a page of the team's packages here.
 // ?team= besides one team: teams left out (-Geospatial), and none (not
-// through a team: logic.js parseTeams).
+// through a team: people.js parseTeams).
 // ?maintainer='s handles left out (-iedame), lowercase.
 export const isTeam = (name) => name.toLowerCase() === state.teamFilter.toLowerCase();
 

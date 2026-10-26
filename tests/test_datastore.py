@@ -6,6 +6,7 @@ import unittest.mock
 
 from nixkeeper import datastore, lock
 from nixkeeper.datastore import data_file, write
+from nixkeeper.naming import shard_of
 
 ENTRIES = [{"repo": "nix_unstable", "version": "1.18.5"}]
 
@@ -177,7 +178,7 @@ class Output(unittest.TestCase):
             shard = json.loads(self.read(f"rows/{n}.json"))["packages"]
             self.assertTrue(shard)  # spread out
             for row in shard:
-                self.assertEqual(datastore.shard_of(row["name"], 4), n)
+                self.assertEqual(shard_of(row["name"], 4), n)
             seen += [row["name"] for row in shard]
         self.assertEqual(sorted(seen), sorted(row["name"] for row in rows))
 
@@ -237,13 +238,13 @@ class Output(unittest.TestCase):
         rows = [full_row(f"pkg{i}") for i in range(1200)]
         write({"packages": rows}, {r["dataFile"]: ENTRIES for r in rows}, self.out)
         reads = []
-        load = datastore._load
+        load = datastore.shards.load_json
 
         def counting(path):
             reads.append(path)
             return load(path)
 
-        with unittest.mock.patch.object(datastore, "_load", counting):
+        with unittest.mock.patch.object(datastore.shards, "load_json", counting):
             saved = datastore.saved_entries(self.out)
         self.assertEqual(saved["pkg7"], ENTRIES)
         self.assertEqual(len(saved), 1200)
@@ -319,7 +320,7 @@ class Output(unittest.TestCase):
         changed = [dict(row) for row in rows]
         changed[0]["nixVersion"] = "2"
         datastore.update({"packages": changed}, {}, self.out)
-        shard = datastore.shard_of("pkg0", 4)
+        shard = shard_of("pkg0", 4)
         for n in range(4):
             after = os.stat(os.path.join(self.out, f"rows/{n}.json")).st_mtime_ns
             self.assertEqual(after != before[n], n == shard, n)
@@ -394,7 +395,7 @@ class RunStamps(unittest.TestCase):
 
 class Unbuilt(unittest.TestCase):
     """Listed for a platform Hydra doesn't build it on (the page's
-    unbuiltWhere: tests/js/logic.test.mjs has the same cases)."""
+    unbuiltWhere: tests/js/status.test.mjs has the same cases)."""
 
     def row(self, platforms, *builds):
         return {
@@ -478,3 +479,108 @@ class Numbers(unittest.TestCase):
                 "unmaintained": 1,
             },
         )
+
+
+def build(status, system="x86_64-linux", **more):
+    """A Hydra build of a row, as the collectors read it."""
+    return {"attr": "a", "system": system, "status": status, **more}
+
+
+class Collectors(unittest.TestCase):
+    """views()' collectors on their own: what each counts, sets included or not."""
+
+    FAILING = {"name": "f", "builds": [build("failed")], "maintainers": ["Ann"]}
+    IN_SET = {**FAILING, "name": "s", "set": "rPackages"}
+
+    def test_each_collector_under_its_own_name(self):
+        # views() reads each by name: a name holding another collector would
+        # only show as wrong output.
+        collectors = datastore.view_files._Collectors.new()
+        expected = {
+            "view_files": datastore.view_files._Views,
+            "counts": datastore.view_files._Counts,
+            "names": datastore.view_files._Names,
+            "facets": datastore.view_files._Facets,
+            "maintainers": datastore.view_files._Maintainers,
+            "ages": datastore.view_files._Ages,
+            "blockers": datastore.view_files._Blockers,
+            "staging": datastore.view_files._StagingNextBlockers,
+            "sets": datastore.view_files._Sets,
+        }
+        self.assertEqual(
+            {name: type(c) for name, c in collectors._asdict().items()}, expected
+        )
+
+    def test_views_leave_a_sets_rows_out_of_most(self):
+        views = datastore.view_files._Views()
+        for row in (self.FAILING, self.IN_SET):
+            views.add(row, "f")
+        files, sizes = views.result()
+        self.assertEqual(sizes["attention"], 1)
+        self.assertEqual(
+            [p["name"] for p in files["views/maintainer/ann.json"]["packages"]],
+            ["f", "s"],
+        )
+        self.assertEqual(
+            [p["name"] for p in files["views/set/rPackages.json"]["packages"]], ["s"]
+        )
+
+    def test_counts_count_a_sets_rows_apart(self):
+        counts = datastore.view_files._Counts()
+        for row in (self.FAILING, self.IN_SET):
+            counts.add(row, "f")
+        found = counts.result()
+        self.assertEqual(
+            (found["tracked"], found["failed"], found["inSets"]), (1, 1, 1)
+        )
+        self.assertEqual(found["failingBuilds"], 2)  # sets included, as zh.fail
+        self.assertEqual(found["buildFailuresOn"], {"linux": 1, "x86_64-linux": 1})
+
+    def test_maintainers_count_a_sets_rows_as_packages_only(self):
+        maintainers = datastore.view_files._Maintainers()
+        for row in (self.FAILING, self.IN_SET):
+            maintainers.add(row, "f")
+        self.assertEqual(maintainers.result(), {"maintainers": [["Ann", 2, 0, 1]]})
+
+    def test_blockers_count_a_stopped_package_with_its_blockers_unknown(self):
+        blockers = datastore.view_files._Blockers()
+        blocker = {"name": "zlib", "row": True}
+        blockers.add(
+            {"name": "a", "builds": [build("dependency", blockedBy=[blocker])]}, "n"
+        )
+        blockers.add({"name": "b", "builds": [build("dependency")]}, "n")
+        self.assertEqual(
+            blockers.result(),
+            {"count": 1, "packages": 2, "top": [["zlib", True, 1, 1]]},
+        )
+
+    def test_staging_next_blockers_say_which_evaluation(self):
+        staging = datastore.view_files._StagingNextBlockers()
+        found = {
+            "eval": 7,
+            "evaluatedAt": "2026-10-25",
+            "builds": [{"by": [{"name": "glib"}]}],
+        }
+        staging.add({"name": "a", "stagingNextBlockedBy": found}, "u")
+        staging.add({"name": "b"}, "u")
+        self.assertEqual(
+            staging.result(),
+            {
+                "eval": 7,
+                "evaluatedAt": "2026-10-25",
+                "count": 1,
+                "packages": 1,
+                "top": [["glib", False, 1, 1]],
+            },
+        )
+
+    def test_a_sets_bar_counts_each_package_at_its_worst(self):
+        sets = datastore.view_files._Sets()
+        sets.add({**self.IN_SET, "markedBroken": True}, "f")  # failing and broken
+        sets.add({"name": "t", "set": "rPackages", "markedBroken": True}, "u")
+        sets.add(self.FAILING, "f")  # not in a set: not counted
+        found = sets.result()["rPackages"]
+        self.assertEqual(
+            (found["packages"], found["failed"], found["broken"]), (2, 1, 2)
+        )
+        self.assertEqual(found["bar"], {"failed": 1, "broken": 1, "outdated": 0})

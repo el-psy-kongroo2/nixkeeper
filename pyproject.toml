@@ -28,9 +28,32 @@ nixkeeper = [
   "community/*.nix",  # the community rules, likewise
 ]
 
+[tool.mypy]
+# nix flake check runs it (checks.lint). Only functions with annotations
+# are checked: for now, those that build a row's verdict, with row: Row
+# (shape.Row).
+files = ["nixkeeper"]
+python_version = "3.11"
+
+[[tool.mypy.overrides]]
+module = "brotli"  # no type information
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 88  # Python's standard (Black / ruff default)
 
 [tool.ruff.lint]
-# pycodestyle, pyflakes, bugbear, pyupgrade, simplify, isort
-select = ["E", "F", "W", "B", "UP", "SIM", "I"]
+# pycodestyle, pyflakes, bugbear, pyupgrade, simplify, isort, pydocstyle
+select = ["E", "F", "W", "B", "UP", "SIM", "I", "D"]
+ignore = [
+  "D105",  # dunder methods (__eq__, __repr__, ...) need no docstring
+  "D403",  # nixpkgs and nixkeeper start a sentence in lowercase
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Args:, Returns:, Raises: (CONTRIBUTING.md)
+
+[tool.ruff.lint.per-file-ignores]
+# Docstring rules are for nixkeeper/ only, as before.
+"tests/**" = ["D"]
+"scripts/**" = ["D"]

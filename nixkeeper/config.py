@@ -1,5 +1,8 @@
-"""Settings shared across nixkeeper. Modules read these as config.NAME at call
-time, so tests can patch them."""
+"""Hold the settings shared across nixkeeper.
+
+Modules read them as config.NAME when they're used, not at import, so the
+command's flags and tests that patch them apply.
+"""
 
 import os
 import re
@@ -25,8 +28,11 @@ import re
 
 
 def _xdg(variable, fallback):
-    """An XDG base folder: the variable if it's an absolute path (the spec
-    ignores relative ones), else ~/fallback."""
+    """Return an XDG base folder.
+
+    That's the variable when it's an absolute path (the spec ignores
+    relative ones), else ~/fallback.
+    """
     value = os.environ.get(variable, "")
     return value if os.path.isabs(value) else os.path.expanduser(f"~/{fallback}")
 
@@ -36,6 +42,10 @@ STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", ".local/state"), "nixkeeper")
 
 
 def _default_lists():
+    """Return the default package lists.
+
+    That's the folder, or lists.json beside it when only that exists.
+    """
     folder = os.path.join(CONFIG_DIR, "package-lists")
     json_file = os.path.join(CONFIG_DIR, "lists.json")
     return (
@@ -45,6 +55,7 @@ def _default_lists():
     )
 
 
+# The settings' defaults (`nixkeeper paths` says which is in use).
 DEFAULTS = {
     "OUT_DIR": os.path.join(STATE_DIR, "data"),
     "LISTS": _default_lists(),
@@ -58,23 +69,45 @@ LISTS = os.environ.get("NIXKEEPER_LISTS") or DEFAULTS["LISTS"]
 NOTIFICATIONS = os.environ.get("NIXKEEPER_NOTIFICATIONS")
 
 
+def data_dir(out_dir=None):
+    """Return the data folder: out_dir, or the configured one by default.
+
+    The configured one is OUT_DIR, set by --data-dir or NIXKEEPER_DATA_DIR.
+    It's read when this is called, not when the caller's module was
+    imported, so the command's --data-dir and tests that set it apply.
+
+    Args:
+        out_dir: A data folder the caller was given, or None.
+
+    Returns:
+        out_dir, or OUT_DIR when out_dir is None or empty.
+    """
+    return out_dir or OUT_DIR
+
+
 def notifications_path():
-    """Where notifications/ is: NIXKEEPER_NOTIFICATIONS, else beside the
-    package lists. Worked out when asked, not at import: --lists sets LISTS
-    after this module loads (the workflows' sync passes it), and a path
-    fixed at import pointed at the default lists' folder instead."""
+    """Return where notifications/ is.
+
+    That's NIXKEEPER_NOTIFICATIONS, else beside the package lists. It's
+    worked out when asked, not at import: --lists sets LISTS after this
+    module loads (the workflows' sync passes it), and a path fixed at
+    import pointed at the default lists' folder instead.
+    """
     return NOTIFICATIONS or os.path.join(
         os.path.dirname(os.path.abspath(LISTS)), "notifications"
     )
 
 
 def subscribers():
-    """Whether notifications/' maintainers and teams get status issues of
-    their own: NIXKEEPER_SUBSCRIBERS (1, true, yes; or 0, false, no), else
-    on with every package (the community instance, whose folder they are)
-    and off elsewhere. A copy of this repository has the community's files,
-    and would otherwise open their issues and mention them; its own status
-    issue (the lists' statusIssue) doesn't depend on this."""
+    """Return whether the maintainers and teams in notifications/ get their own issues.
+
+    NIXKEEPER_SUBSCRIBERS says so (1, true, yes; or 0, false, no). Without
+    it, they do with every package (the community instance, whose folder
+    they are) and don't elsewhere: a copy of this repository has the
+    community's files, and would otherwise open their issues and mention
+    them. The copy's own status issue (the lists' statusIssue) doesn't
+    depend on this.
+    """
     value = os.environ.get("NIXKEEPER_SUBSCRIBERS", "").strip().lower()
     if value:
         return value in ("1", "true", "yes")
@@ -82,17 +115,20 @@ def subscribers():
 
 
 NOTIFY = None  # set by the command; otherwise NIXKEEPER_NOTIFY, read when used
+# Repology's repository for nixpkgs unstable.
 NIX_REPO = "nix_unstable"
 ALL_PACKAGES = None  # set by the command; otherwise NIXKEEPER_ALL_PACKAGES
 
 
 def all_packages():
-    """Whether the sync tracks every nixpkgs package (the community
-    instance), not only the lists' (docs/all-packages.md): the lists' own
-    packages are read as always, the rest only in bulk (the digests and
-    listings), each source with no per-package lookups. Off unless the
-    command or NIXKEEPER_ALL_PACKAGES (1, true, yes) turns it on: never from
-    the lists, which forks copy."""
+    """Return whether the sync tracks every nixpkgs package, not only the lists'.
+
+    That's the community instance's mode (docs/all-packages.md): the lists'
+    own packages are read as always, the rest only in bulk (the digests and
+    listings), each source with no per-package lookups. It's off unless the
+    command or NIXKEEPER_ALL_PACKAGES (1, true, yes) turns it on, and never
+    from the lists, which forks copy.
+    """
     if ALL_PACKAGES is not None:
         return ALL_PACKAGES
     value = os.environ.get("NIXKEEPER_ALL_PACKAGES", "")
@@ -156,7 +192,7 @@ UNVERSIONED_SETS = ("darwin", "freebsd")
 # With every package and no updates digest (it isn't current): how many
 # packages not on the lists a sync reads the nixpkgs-update logs of (those
 # whose logs changed since the last sync; one or two requests each), the
-# outdated and failing first. None: about 4,000 log folders change a day,
+# outdated and failing first. It's 0: about 4,000 log folders change a day,
 # more than a sync can read politely, so they keep the attempt last read,
 # marked unread, until the digest is back.
 UPDATE_LOGS_BUDGET = 0
@@ -164,16 +200,24 @@ UPDATE_LOGS_BUDGET = 0
 # lists (the newest, one entry each): what its details show first. The rest
 # are on Repology, linked from there.
 REPOLOGY_ENTRIES_KEPT = 8
+# Where nixkeeper lives, named in the User-Agent.
 UPSTREAM_URL = "https://github.com/nixkeeper/nixkeeper"
 CONTACT_MAX = 100  # characters of NIXKEEPER_CONTACT kept in the User-Agent
 
 
+def on_github_actions():
+    """Return whether this runs on GitHub Actions."""
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
 def user_agent():
-    """How nixkeeper introduces itself to every source, as API etiquette asks:
-    the software, its version and where it lives (the same for every copy:
-    a fix belongs there), then who runs this copy, where that's public or
-    chosen: the repository running it on GitHub Actions (public anyway), and
-    NIXKEEPER_CONTACT. A personal machine adds nothing unless asked.
+    """Return the User-Agent header nixkeeper sends to every source.
+
+    As API etiquette asks, it names the software, its version and where it
+    lives (the same for every copy: a fix belongs there), then who runs
+    this copy, where that's public or chosen: the repository running it on
+    GitHub Actions (public anyway), and NIXKEEPER_CONTACT. A personal
+    machine adds nothing unless asked:
 
       nixkeeper/0.9.0 (+https://github.com/nixkeeper/nixkeeper; someone/nixkeeper)
     """
@@ -181,11 +225,7 @@ def user_agent():
 
     who = []
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if (
-        os.environ.get("GITHUB_ACTIONS") == "true"
-        and repo
-        and not UPSTREAM_URL.endswith(f"/{repo}")
-    ):
+    if on_github_actions() and repo and not UPSTREAM_URL.endswith(f"/{repo}"):
         who.append(repo)
     contact = _comment_safe(os.environ.get("NIXKEEPER_CONTACT", ""))
     if contact:
@@ -194,10 +234,12 @@ def user_agent():
 
 
 def _comment_safe(text):
-    """text fit for the User-Agent's comment: printable ASCII only (no line
-    breaks: they'd start a new header), no parentheses or semicolons (they'd
-    end the comment or a part of it), spaces collapsed, at most CONTACT_MAX
-    characters."""
+    """Make text fit for the User-Agent's comment.
+
+    That's printable ASCII only (no line breaks: they'd start a new header),
+    no parentheses or semicolons (they'd end the comment or a part of it),
+    spaces collapsed, and at most CONTACT_MAX characters.
+    """
     text = re.sub(r"[^\x20-\x7e]|[();]", " ", text)
     return " ".join(text.split())[:CONTACT_MAX].strip()
 
@@ -217,7 +259,8 @@ NIXPKGS_SOURCE_URL = "https://github.com/NixOS/nixpkgs/blob/{revision}/{path}"
 # discontinued on 2026-10-09. REPOLOGY_BASE_URL sets another one instead.
 _override = os.environ.get("REPOLOGY_BASE_URL")
 REPOLOGY_URLS = [_override] if _override else ["https://repology.org"]
-RETRY_DELAYS = [5, 15]  # seconds before each retry of a failed Repology request
+# Seconds before each retry of a failed request (repology.py, http.py).
+RETRY_DELAYS = [5, 15]
 # The longest one answer may take to arrive in full, in seconds (http.py):
 # a request's own timeout only bounds each wait for the next bytes, so a
 # server sending a little at a time could otherwise hold a run for hours.

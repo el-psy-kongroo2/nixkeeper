@@ -5,7 +5,9 @@
 // app.js draws it (renderScope) and handles its buttons.
 
 import { readJson } from './data.js';
-import { dayPosition, html, NAME_DOTS, raw, shortAge, trendChange } from './logic.js';
+import { dayPosition, shortAge, trendChange } from './dates.js';
+import { html, raw } from './markup.js';
+import { NAME_DOTS } from './people.js';
 import { scopeHref } from './state.js';
 import { store } from './store.js';
 import {

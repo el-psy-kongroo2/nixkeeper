@@ -1,34 +1,39 @@
-"""The frequent check: the update checks marked `frequent = true` in
-package-lists/update-checks.nix, run about hourly for packages where a new
-release matters within hours (browsers, for their security fixes). Touches only
-those packages: their Repology data (so the comparison uses nixpkgs' current
-version) and their update check. `nixkeeper frequent-check`; from a
-checkout, `nix run .#frequent-check`."""
+"""Run the frequent update checks, about hourly.
 
-import sys
+The frequent checks are the update checks marked `frequent = true` in
+package-lists/update-checks.nix, for packages where a new release matters
+within hours (browsers, for their security fixes). This touches only those
+packages: their Repology data (so the comparison uses nixpkgs' current
+version) and their update check. Run it with `nixkeeper frequent-check`,
+or `nix run .#frequent-check` from a checkout.
+"""
+
 import urllib.error
 from datetime import UTC, datetime
 
-from . import community, follows, history, partial, rows
-from .changes import count_master
+from . import community, follows, history, log, partial, rows, verdict
 from .sources import nixpkgs as nixpkgs_source
 from .sources import repology, upstream
 
-# Fields a run sets from scratch, so a copy of last run's row mustn't keep
-# them: each is set again below if it still applies.
+# Fields a run sets from scratch, so a copy of the last run's row mustn't
+# keep them: each is set again below if it still applies.
 REFRESHED = ("upstream", "outdatedSince")
 
 
 def refresh_repology(row, previous, now):
-    """Update row's nixpkgs version and status from Repology. Returns the
-    project's entries to write to its data file, or None if the lookup failed
-    (row then keeps its data, marked as not refreshed like in a full sync)."""
+    """Update row's nixpkgs version and status from Repology.
+
+    A lookup that fails leaves the row's data as it was, marked as not
+    refreshed, as in a full sync.
+
+    Returns:
+        The project's entries, to write to its data file, or None when the
+        lookup failed or found nothing.
+    """
     try:
         project, entries = repology.project_by_name(row["project"])
     except (urllib.error.URLError, OSError, ValueError) as e:
-        print(
-            f"::warning::{row['name']}: Repology lookup failed ({e})", file=sys.stderr
-        )
+        log.warn(f"{row['name']}: Repology lookup failed ({e})")
         row["staleSince"] = row.get("staleSince") or previous.get("checkedAt") or now
         return None
     if project is None:
@@ -54,19 +59,23 @@ def refresh_repology(row, previous, now):
     for key in ("nixVersion", "nixStatus", "nixVulnerable", "refVersion", "repoCount"):
         row[key] = fresh[key]
     row.pop("repologyVersion", None)
+    # That's Repology's verdict now, for the row to be decided from
+    # (verdict.decide).
+    row.pop("repologyVerdict", None)
     if channel:
         rows.channel_versions([row], {a: {"version": channel} for a in row["attrs"]})
-    # Repology's verdict is this fresh one now, for the check to decide
-    # against (upstream.apply); without a refresh, the one it kept stays.
-    row.pop("repologySaid", None)
     row.pop("staleSince", None)
     row["repologyCheckedAt"] = now
     return entries
 
 
 def main():
+    """Run the frequent check, and publish what changed."""
     now = datetime.now(UTC).isoformat()
-    previous, packages = partial.load()
+    loaded = partial.load()
+    if loaded is None:
+        return  # waiting for a full sync (partial.load says so)
+    previous, packages = loaded
     # Your own checks and, if the lists opt in, the community's (community.py).
     merged, from_community = community.merge(
         nixpkgs_source.read_lists(), [row["name"] for row in packages]
@@ -75,12 +84,9 @@ def main():
     by_name = {row["name"]: row for row in packages}
     selected = [by_name[name] for name in checks if name in by_name]
     if not selected:
-        print("No frequent update checks for tracked packages.", file=sys.stderr)
+        log.info("No frequent update checks for tracked packages.")
         return
-    print(
-        f"Frequent check: {', '.join(row['name'] for row in selected)}",
-        file=sys.stderr,
-    )
+    log.info(f"Frequent check: {', '.join(row['name'] for row in selected)}")
     data_files = {}
     for row in selected:
         for key in REFRESHED:
@@ -94,9 +100,10 @@ def main():
             if entries is not None:
                 data_files[row["dataFile"]] = entries
     upstream.add_checks(selected, checks, previous, now, from_community)
-    # Repology's refVersion is fresh again: count master (as the sync does).
+    # Repology's verdict is fresh again: decide each row's from it (as the
+    # sync does), with what master and the update PRs had at the last sync.
     for row in selected:
-        count_master(row)
+        verdict.decide(row)
     # Packages that follow one of these (follows.py) get its new version too.
     refreshed = {row["name"] for row in selected}
     following = {

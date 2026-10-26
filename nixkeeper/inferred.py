@@ -1,23 +1,29 @@
-"""Update checks worked out from nixpkgs itself: a package fetched from a
-GitHub tag (fetchFromGitHub, a release download) is checked against that
-repository's tags, with the tag scheme its own tag shows ("v" + version,
-...). They run with the other update checks (upstream.py), for packages
-without a rule of their own or the community's (which win), unless the
-lists turn them off (`workedOutChecks = false;`). Each daily sync also logs
-how they compare with Repology, and with the packages' rules."""
+"""Work out update checks from nixpkgs itself.
+
+A package fetched from a GitHub tag (fetchFromGitHub, a release download)
+is checked against that repository's tags, with the tag scheme its own tag
+shows ("v" + version, ...). These checks run with the other update checks
+(upstream.py), for packages without a rule of their own or the
+community's (which win), unless the lists turn them off
+(`workedOutChecks = false;`). Each daily sync also logs how they compare
+with Repology, and with the packages' rules.
+"""
 
 import collections
 import re
-import sys
 
-from . import config
+from . import config, log
 from .sources import github, upstream
 from .sources import nixpkgs as nixpkgs_source
 from .versions import is_newer
 
+# A GitHub repository's URL: its owner and name.
 GITHUB = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/|$)")
+# A full commit hash.
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
+# A release download's tag, in its URL.
 RELEASE = re.compile(r"/releases/download/([^/]+)/")
+# A source archive's tag, in its URL.
 ARCHIVE = re.compile(r"/archive/(?:refs/tags/)?(.+?)\.(?:tar\.gz|zip)$")
 # Versions made of numbers only (1.19.28, 2024.05, 7_2): the tags a check
 # worked out this way looks for. Others (betas, unstable versions) are left
@@ -29,10 +35,13 @@ SUFFIX = re.compile(r"(?<![0-9])([0-9]+(?:_[0-9]+)*)$")
 
 
 def series(attr, version):
-    """The series a versioned attribute keeps, as the start of its version
-    (tracy_0_11 with 0.11.1: "0.11"), or None: the digits its name ends in
-    are the version's first parts, with underscores between them or run
-    together (python313 with 3.13.7: "3.13"), short of the whole version."""
+    """Return the series a versioned attribute keeps, or None.
+
+    The series is the start of its version: the digits the attribute's
+    name ends in are the version's first parts, with underscores between
+    them or run together, short of the whole version. tracy_0_11 with
+    0.11.1 keeps "0.11"; python313 with 3.13.7 keeps "3.13".
+    """
     m = SUFFIX.search(attr or "")
     if not m:
         return None
@@ -46,7 +55,7 @@ def series(attr, version):
 
 
 def tag_of(src):
-    """The tag (or commit) src was fetched from, or None."""
+    """Return the tag (or commit) src was fetched from, or None."""
     if src.get("tag"):
         return src["tag"]
     rev = src.get("rev") or ""
@@ -59,11 +68,21 @@ def tag_of(src):
 
 
 def github_check(src, attr=None):
-    """(check, None): the GitHub tags check src's package (attr) would have,
-    as an update check ({"github", "tags"}); or (None, why not). The tags it
-    takes look like nixpkgs' version: the same prefix and separators, and
-    for a version with separators (1.2.3), at least one (not 20240214, a
-    date); for a versioned attribute (series), only that series'."""
+    """Work out the GitHub tags check src's package would have.
+
+    The tags it takes look like nixpkgs' version: the same prefix and
+    separators, and, for a version with separators (1.2.3), at least one
+    (not 20240214, a date). For a versioned attribute (series), only that
+    series' tags count.
+
+    Args:
+        src: The package's source, as nixpkgs evaluates it.
+        attr: The package's attribute.
+
+    Returns:
+        (check, None), the check as an update check ({"github", "tags"});
+        or (None, why not).
+    """
     m = GITHUB.match(src.get("gitRepoUrl") or "") or GITHUB.match(src.get("url") or "")
     if not m:
         return None, "not from GitHub"
@@ -93,8 +112,12 @@ def github_check(src, attr=None):
 
 
 def for_row(row, sources):
-    """(check, None) from the first of row's attributes that gives one, or
-    (None, why not) from the first that has a source."""
+    """Work out a row's check from the first of its attributes that gives one.
+
+    Returns:
+        (check, None), or (None, why not) from the first attribute that has
+        a source.
+    """
     why = "no source"
     for attr in row.get("attrs") or [row["name"]]:
         if attr not in sources:
@@ -108,11 +131,16 @@ def for_row(row, sources):
 
 
 def verdict(row, version, rule):
-    """How a worked-out check's version compares with what the sync has:
-    ("agree", "disagree" or "rule differs", what to say). rule: the row's
-    own update check, when it has one: it's compared with that instead of
-    Repology, and where they differ, the rule is what the row uses (a series
-    the worked-out check can't tell, say), so that's no disagreement."""
+    """Compare a worked-out check's version with what the sync has.
+
+    It's compared with Repology, or, when the row has an update check of
+    its own (rule), with that rule's result. Where those differ, the rule
+    is what the row uses (a series the worked-out check can't tell, for
+    example), so that's no disagreement.
+
+    Returns:
+        ("agree", "disagree" or "rule differs", what to say).
+    """
     nix = row.get("nixVersion")
     if rule:
         theirs = (row.get("upstream") or {}).get("version")
@@ -134,39 +162,57 @@ def verdict(row, version, rule):
 
 
 def enabled(lists):
-    """Whether the lists use worked-out checks: unless they turn them off with
-    `workedOutChecks = false;`."""
+    """Return whether the lists use worked-out checks.
+
+    They do unless they turn them off with `workedOutChecks = false;`.
+    """
     return (lists or {}).get("workedOutChecks") is not False
 
 
 class WorkedOut:
-    """The checks worked out for a sync's rows ({name: check}), why the rest
-    have none (a Counter), and each row's newest version by Repology before
-    the update checks change it ({name: refVersion}), to compare with."""
+    """The checks worked out for a sync's rows.
+
+    Attributes:
+        checks: {name: check}.
+        not_worked: Why the rest have none, as a Counter.
+        repology: Each row's newest version by Repology before the update
+            checks change it ({name: refVersion}), to compare with.
+    """
 
     def __init__(self, checks, not_worked, repology):
+        """Hold the checks, the reasons for the rest, and Repology's versions."""
         self.checks, self.not_worked, self.repology = checks, not_worked, repology
 
     def to_run(self, rules):
-        """The worked-out checks to run: those of packages without a rule."""
+        """Return the worked-out checks of packages without a rule."""
         return {n: c for n, c in self.checks.items() if n not in rules}
 
 
 def work_out(lists, rows, rules, revision):
-    """WorkedOut for rows, or None (says why): turned off, no GitHub token to
-    run them with, or nixpkgs didn't evaluate. rules: the update checks the
-    lists and the community give."""
+    """Work out the update checks for rows.
+
+    Args:
+        lists: The package lists.
+        rows: The rows.
+        rules: The update checks the lists and the community give.
+        revision: The nixpkgs revision to evaluate the sources at.
+
+    Returns:
+        A WorkedOut, or None when the checks are turned off, or (with the
+        reason in the log) there's no GitHub token to run them with, or
+        nixpkgs didn't evaluate.
+    """
     if not enabled(lists):
         return None
     if not github.token():
-        print("Worked-out update checks: skipped (no GITHUB_TOKEN)", file=sys.stderr)
+        log.info("Worked-out update checks: skipped (no GITHUB_TOKEN)")
         return None
     rows = [row for row in rows if row.get("nixVersion")]
     try:
         attrs = {a for row in rows for a in row.get("attrs") or [row["name"]]}
         sources = nixpkgs_source.sources(attrs, revision)
     except nixpkgs_source.EvalError as e:
-        print(f"Worked-out update checks: skipped ({e})", file=sys.stderr)
+        log.info(f"Worked-out update checks: skipped ({e})")
         return None
     checks, not_worked = {}, collections.Counter()
     for row in rows:
@@ -182,10 +228,20 @@ def work_out(lists, rows, rules, revision):
 
 
 def report(worked, rows, rules, failed):
-    """Log how the worked-out checks compare (a log group in the sync's
-    output): those that ran, from their rows (after upstream.add_checks;
-    failed: its {name: why} for them) against Repology; those of packages
-    with a rule, asked here (only for this) against the rule's result."""
+    """Log how the worked-out checks compare, in a log group of the sync's output.
+
+    The checks that ran are read from their rows (after
+    upstream.add_checks) and compared with Repology. Those of packages with
+    a rule are run here, only for this, and compared with the rule's
+    result.
+
+    Args:
+        worked: work_out's result.
+        rows: The rows.
+        rules: The update checks the lists and the community give.
+        failed: add_checks' {name: why} for the worked-out checks that
+            couldn't run.
+    """
     by_name = {row["name"]: row for row in rows}
     failed, found = dict(failed), {}
     for name in worked.to_run(rules):
@@ -194,9 +250,11 @@ def report(worked, rows, rules, failed):
             found[name] = up["version"]
 
     def keep_previous(name, why):
+        """Note that name's check couldn't run."""
         failed[name] = why
 
     def add(name, version, where, what, **_):
+        """Note a check's version for name, or that nothing matched in where."""
         if version is None:
             failed[name] = f"nothing in {where} matches {what}"
         else:
@@ -218,25 +276,23 @@ def report(worked, rows, rules, failed):
     agree, disagree = len(lines["agree"]), len(lines["disagree"])
     differ = len(lines["rule differs"])
     used = len(worked.to_run(rules))
-    print(
-        f"::group::Worked-out update checks: {len(worked.checks)} of "
+    title = (
+        f"Worked-out update checks: {len(worked.checks)} of "
         f"{len(worked.repology)} packages ({used} used, {len(ruled)} with a "
         f"rule), {agree} agree with Repology or their rule, {disagree} don't, "
-        f"{differ} differ from their rule (the rule is used), {len(failed)} failed",
-        file=sys.stderr,
+        f"{differ} differ from their rule (the rule is used), {len(failed)} failed"
     )
-    print(
-        "Not worked out: "
-        + ", ".join(f"{n} {why}" for why, n in worked.not_worked.most_common()),
-        file=sys.stderr,
-    )
-    for title, kind in (
-        ("Disagree", "disagree"),
-        ("Rule differs (the rule is used)", "rule differs"),
-        ("Agree", "agree"),
-    ):
-        print(f"{title}:", *lines[kind], sep="\n", file=sys.stderr)
-    print("Failed (left to Repology):", file=sys.stderr)
-    for name in sorted(failed):
-        print(f"  {name}: {failed[name]}", file=sys.stderr)
-    print("::endgroup::", file=sys.stderr)
+    with log.group(title):
+        log.info(
+            "Not worked out: "
+            + ", ".join(f"{n} {why}" for why, n in worked.not_worked.most_common())
+        )
+        for heading, kind in (
+            ("Disagree", "disagree"),
+            ("Rule differs (the rule is used)", "rule differs"),
+            ("Agree", "agree"),
+        ):
+            log.info("\n".join([f"{heading}:", *lines[kind]]))
+        log.info("Failed (left to Repology):")
+        for name in sorted(failed):
+            log.info(f"  {name}: {failed[name]}")

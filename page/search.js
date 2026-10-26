@@ -6,14 +6,9 @@
 // the box shows it. Where the page is (a view, a set, a list, a cause, one
 // package) stays the address's: not in the box.
 
-import {
-  html,
-  maintainersParam,
-  NAME_STATUSES,
-  parseMaintainers,
-  parseTeams,
-  teamsParam,
-} from './logic.js';
+import { NAME_STATUSES } from './facets.js';
+import { html, setHtml } from './markup.js';
+import { maintainersParam, parseMaintainers, parseTeams, teamsParam } from './people.js';
 import { known, state } from './state.js';
 
 // The refines (REFINES keys), as qualifiers.
@@ -398,19 +393,20 @@ export function wireSearchMenu(values) {
     found = null;
     active = -1;
     menu.hidden = true;
-    menu.innerHTML = '';
+    menu.textContent = '';
     box.setAttribute('aria-expanded', 'false');
     box.removeAttribute('aria-activedescendant');
   };
   const draw = () => {
-    menu.innerHTML = found.items
-      .map(
+    setHtml(
+      menu,
+      html`${found.items.map(
         (it, i) =>
           html`<div role="option" id="searchOption${i}" class="search-option" data-i="${i}" aria-selected="${i === active}"><span class="so-text">${it.text}</span><span class="so-label">${it.label}</span>${
             it.count != null ? html`<span class="so-count">${it.count.toLocaleString()}</span>` : ''
           }</div>`,
-      )
-      .join('');
+      )}`,
+    );
     if (active >= 0) box.setAttribute('aria-activedescendant', `searchOption${active}`);
     else box.removeAttribute('aria-activedescendant');
   };

@@ -1,21 +1,24 @@
-"""nixkeeper's own update checks (package-lists/update-checks.nix): the newest
-upstream release of a package, from its GitHub repository's tags or from a web
-page such as the vendor's release notes, or for an unstable version
-("1.0-unstable-2024-05-01"), the commits on the branch it follows. A version
-only counts as newest on Repology once repositories it trusts package it (the
-AUR alone doesn't), so without this a fresh release leaves nixpkgs looking up
-to date."""
+"""Run nixkeeper's own update checks.
+
+The checks (package-lists/update-checks.nix) find the newest upstream
+release of a package: from its GitHub repository's tags, or from a web page
+such as the vendor's release notes; or, for an unstable version
+("1.0-unstable-2024-05-01"), the commits on the branch it follows. A
+version only counts as newest on Repology once repositories it trusts
+package it (the AUR alone doesn't), so without these checks a fresh release
+leaves nixpkgs looking up to date.
+"""
 
 import hashlib
 import json
 import re
-import sys
 import urllib.error
 import urllib.parse
 from datetime import UTC, datetime, timedelta
 
 from .. import community as community_rules
-from .. import config, history, schedule
+from .. import config, history, log, schedule, verdict
+from ..shape import Row
 from ..versions import is_newer, version_key
 from . import github, http
 
@@ -23,28 +26,35 @@ __all__ = ["is_newer", "version_key"]  # also used from here (and the tests)
 
 
 def highest(matches, regex):
-    """The highest version among regex matches (its capture group, if it has
-    one, is the version), or None if there are none."""
+    """Return the highest version among regex's matches, or None if there are none.
+
+    The capture group, when regex has one, is the version.
+    """
     versions = [m.group(1) if regex.groups else m.group(0) for m in matches if m]
     return max(versions, key=version_key, default=None)
 
 
 def latest(tags, pattern):
-    """The highest version among tags matching pattern (each tag on its own,
-    so ^ and $ mean the tag's start and end)."""
+    """Return the highest version among the tags matching pattern.
+
+    Each tag is matched on its own, so ^ and $ are the tag's start and end.
+    """
     regex = re.compile(pattern)
     return highest(map(regex.search, tags), regex)
 
 
 def latest_on_page(text, pattern):
-    """The highest version anywhere on a page (a release-notes page lists
-    old versions too; which comes first doesn't matter)."""
+    """Return the highest version anywhere on a page.
+
+    A release-notes page lists old versions too, so which comes first
+    doesn't matter.
+    """
     regex = re.compile(pattern)
     return highest(regex.finditer(text), regex)
 
 
 # nixpkgs' unstable versions: what they're based on, then the date (UTC) of
-# the commit they package, e.g. "5.1.0-b2-unstable-2022-11-14".
+# the commit they package, such as "5.1.0-b2-unstable-2022-11-14".
 UNSTABLE = re.compile(r"^(.*-unstable-)([0-9]{4}-[0-9]{2}-[0-9]{2})$")
 
 # When newer commits make an unstable version outdated: once one of them has
@@ -54,15 +64,23 @@ OUTDATED_AFTER = {"days": 90, "commits": None}
 
 
 def unstable_date(nix_version):
-    """The date in an unstable version, or None if it isn't one."""
+    """Return the date in an unstable version, or None if it isn't one."""
     m = UNSTABLE.match(nix_version or "")
     return m.group(2) if m else None
 
 
 def unstable_version(nix_version, committed):
-    """nixpkgs' unstable version, moved to the date of the commit committed
-    (GitHub's ISO time) if that's later: the version an update to that commit
-    would have. None if nix_version isn't an unstable version."""
+    """Return nixpkgs' unstable version moved to a commit's date, if that's later.
+
+    That's the version an update to that commit would have.
+
+    Args:
+        nix_version: nixpkgs' version.
+        committed: The commit's date, as GitHub gives it (ISO).
+
+    Returns:
+        The version, or None when nix_version isn't an unstable version.
+    """
     m = UNSTABLE.match(nix_version or "")
     if not m:
         return None
@@ -72,30 +90,32 @@ def unstable_version(nix_version, committed):
 
 
 def outdated_after(check):
-    """A branch check's limits: the defaults, with its own outdatedAfter."""
+    """Return a branch check's limits: the defaults, with its own outdatedAfter."""
     return {**OUTDATED_AFTER, **(check.get("outdatedAfter") or {})}
 
 
-def apply(row, found, decides=True):
-    """Record a check's result on its row. When upstream is ahead of nixpkgs,
-    it's also the version the row is compared against (unless Repology has
-    seen an even newer one). found["newer"], if given, says whether it counts
-    as ahead (a branch check's newer commits may not count yet).
+def record(row: Row, found):
+    """Record an update check's result on its row, for verdict.decide.
+
+    It's recorded with whether it counts as newer than nixpkgs' version
+    ("newer"). found["newer"], when given, says so already: a branch
+    check's newer commits may not count yet. How the result counts in the
+    verdict is verdict.decide's (_update_check).
 
     A rule's check (yours, the community's, or one it follows) is the
     package's own source, as a version feed is: where it and Repology
-    disagree on whether nixpkgs is outdated, the check decides, and what
-    Repology said is kept beside it ("repologySaid": its status and newest
-    version), for the page. A rule is wrong only when the rule is; Repology's
-    verdict, whenever one of its own rules lags (google-chrome's "155 and up
-    are betas", kept after 155 went stable). A worked-out check (inferred),
-    or a rule's last result kept because it failed this time (decides
-    False), only adds a newer version Repology hasn't seen; a worked-out
-    one not even that for an older version kept beside a newer one, nor for
-    the version an up-to-date rule names. Nor does a check decide for a kept
-    version (config.KEPT, or one outdated in its own series, still kept
-    beside a newer one): the newest release isn't the one to compare it
-    with."""
+    disagree on whether nixpkgs is outdated, the check decides. That way
+    the verdict is wrong only when the rule is, while Repology's is wrong
+    whenever one of its own rules lags (google-chrome's "155 and up are
+    betas", kept after 155 went stable). A worked-out check (inferred)
+    only adds a newer version Repology hasn't seen, and not even that for
+    an older version kept beside a newer one, nor for the version an
+    up-to-date rule names.
+
+    Args:
+        row: The row, changed in place.
+        found: The check's result, {"version", "newer"?, "inferred"?, ...}.
+    """
     kept = row.get("nixStatus") == config.KEPT or bool(row.get("keptBeside"))
     newer = found.get("newer")
     if newer is None:
@@ -119,46 +139,46 @@ def apply(row, found, decides=True):
         # rule is about Repology's 7.0.0, another project's; GitHub's 2.12.1
         # is a real release).
         newer = False
-    found = {**found, "newer": newer}
-    row["upstream"] = found
-    # Repology's verdict from before a check decided: a row checked again
-    # (the hourly checks, between Repology refreshes) starts from it.
-    if said := row.pop("repologySaid", None):
-        row["nixStatus"], row["refVersion"] = said["status"], said.get("newest")
-    said = {"status": row.get("nixStatus")}
-    if row.get("refVersion"):
-        said["newest"] = row["refVersion"]
-    if newer and not is_newer(row.get("refVersion") or "", found["version"]):
-        row["refVersion"] = found["version"]
-    if (
-        decides
-        and not found.get("inferred")
-        and row.get("nixVersion")
-        and not kept
-        and newer != (row.get("nixStatus") in config.OUTDATED_STATUSES)
-    ):
-        row["repologySaid"] = said
-        row["nixStatus"] = "outdated" if newer else "newest"
-        if not newer:
-            # Nothing newer to update to (Repology's "newest elsewhere" was
-            # older, or not newer by the check), as an up-to-date rule.
-            row["refVersion"] = None
+    row["upstream"] = {**found, "newer": newer}
+
+
+def apply(row: Row, found):
+    """Record an update check's result on its row, and decide its verdict again.
+
+    Args:
+        row: The row, changed in place.
+        found: The check's result (record).
+    """
+    record(row, found)
+    verdict.decide(row)
 
 
 def fingerprint(check):
-    """A short id of an update check's rule, recorded with its result: a rule
-    edited since (another page, pattern, branch, ...) is due at once."""
+    """Return a short id of an update check's rule, recorded with its result.
+
+    A rule edited since (another page, pattern, branch, ...) is then due at
+    once.
+    """
     text = json.dumps(check, sort_keys=True)
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def due(name, check, row, before, now):
-    """Whether an update check should run now. A frequent one always does
-    (it's meant to be quick: browsers' security fixes). The rest run daily
-    while something's going on: found a newer version (schedule.daily); at
-    once when never run, edited since, failed last time, or nixpkgs' version
-    changed since. Otherwise, with nothing new found, every QUIET_DAYS
-    (schedule.due). before: the row at the last sync (None if new)."""
+    """Return whether an update check should run now.
+
+    A frequent one always runs: it's meant to be quick (browsers' security
+    fixes). The rest run at once when never run, edited since, failed last
+    time, or nixpkgs' version changed since; daily (schedule.daily) while
+    the last run found a newer version; otherwise every QUIET_DAYS
+    (schedule.due).
+
+    Args:
+        name: The row's name.
+        check: The update check.
+        row: The row.
+        before: The row at the last sync, or None when it's new.
+        now: The run's time.
+    """
     last = (before or {}).get("upstream") or {}
     if (
         check.get("frequent")
@@ -174,16 +194,29 @@ def due(name, check, row, before, now):
 
 
 def add_checks(
-    rows, checks, previous, now, community=frozenset(), inferred=frozenset()
+    rows: list[Row], checks, previous, now, community=frozenset(), inferred=frozenset()
 ):
-    """Run the update checks for rows that have one. A check that can't run,
-    GitHub or web page alike, keeps the previous run's result and marks the
-    row as not refreshed: usually the check itself needs fixing (a moved page,
-    a changed tag scheme). community: the names whose check is a community
-    rule (community.py), held to its limits and fetched in safe mode.
-    inferred: the names whose check was worked out from nixpkgs (inferred.py):
-    nobody wrote those to fix, so one that can't run only leaves the row to
-    Repology, without a warning. Returns {name: why} for those."""
+    """Run the update checks of the rows that have one.
+
+    A check that can't run, on GitHub or a web page alike, keeps the
+    previous run's result and marks the row as not refreshed: usually the
+    check itself needs fixing (a moved page, a changed tag scheme). A check
+    that isn't due keeps what it found last time.
+
+    Args:
+        rows: The rows, changed in place.
+        checks: The update checks, by row name.
+        previous: The last run's data.
+        now: The run's time.
+        community: The names whose check is a community rule
+            (community.py), held to its limits and fetched in safe mode.
+        inferred: The names whose check was worked out from nixpkgs
+            (inferred.py). Nobody wrote those to fix, so one that can't run
+            only leaves the row to Repology, without a warning.
+
+    Returns:
+        {name: why} for the worked-out checks that couldn't run.
+    """
     by_name = {row["name"]: row for row in rows}
     # Checks for untracked packages: reported with the lists (listcheck.py).
     # follows has nothing to fetch: follows.py applies it after master.
@@ -192,7 +225,7 @@ def add_checks(
         for name, check in checks.items()
         if name in by_name and "follows" not in check
     }
-    failed = {}
+    failed: dict[str, str] = {}
     if not wanted:
         return failed
     before = {row["name"]: row for row in previous["packages"]}
@@ -203,33 +236,42 @@ def add_checks(
     for name in quiet:
         apply(by_name[name], before[name]["upstream"])
         del wanted[name]
-    print(
+    log.info(
         f"Running {len(wanted)} update checks"
         + (
             f" ({len(quiet)} found nothing new in the last {config.QUIET_DAYS} days)"
             if quiet
             else ""
         )
-        + "...",
-        file=sys.stderr,
+        + "..."
     )
     if not wanted:
         return failed
 
     def keep_previous(name, why):
+        """Record that name's check couldn't run (why), keeping its last result.
+
+        A worked-out check is only noted in the result. A rule's failure is
+        said in the log, and marks the row as not refreshed.
+        """
         if name in inferred:
             failed[name] = why
             return
-        # Said so, for the page: a community rule is fixed in nixkeeper.
+        # Said so for the page, as a community rule is fixed in nixkeeper
+        # itself.
         if name in community and not why.startswith("community rule"):
             why = f"community rule: {why}"
-        print(f"::warning::update check for {name}: {why}", file=sys.stderr)
+        log.warn(f"update check for {name}: {why}")
         old = before.get(name) or {}
         if old.get("upstream"):
-            apply(by_name[name], old["upstream"], decides=False)
+            # Kept, but not deciding: the verdict is decided again once the
+            # row is marked not refreshed (verdict._update_check).
+            record(by_name[name], old["upstream"])
         history.not_refreshed(by_name[name], "upstream", why, old, now)
+        verdict.decide(by_name[name])
 
     def found(name, version, where, what, **extra):
+        """Record a check's result for name, or that nothing matched in where."""
         if version is None:
             keep_previous(name, f"nothing in {where} matches {what}")
         else:
@@ -258,9 +300,16 @@ def add_checks(
 
 
 def check_github(checks, versions, now, keep_previous, found):
-    """All GitHub checks: tags in one request, branches in another.
-    versions: nixpkgs' version of each package, which a branch check compares
-    against."""
+    """Run the GitHub checks: the tags in one request, the branches in another.
+
+    Args:
+        checks: The checks, by row name.
+        versions: nixpkgs' version of each package, which a branch check
+            compares with.
+        now: The run's time.
+        keep_previous: add_checks' callback for a check that can't run.
+        found: add_checks' callback for a result.
+    """
     token = github.token()
     if not token:
         for name in checks:
@@ -275,8 +324,11 @@ def check_github(checks, versions, now, keep_previous, found):
 
 
 def check_tags(token, checks, keep_previous, found):
-    """Checks against a repository's tags, GITHUB_REPOS_BATCH repositories per
-    request (a request that fails only affects its own)."""
+    """Run the checks against a repository's tags.
+
+    GITHUB_REPOS_BATCH repositories go in each request, so a request that
+    fails only affects its own.
+    """
     repos = sorted({c["github"] for c in checks.values()})
     tags, failed = {}, {}
     for start in range(0, len(repos), config.GITHUB_REPOS_BATCH):
@@ -314,9 +366,12 @@ def check_tags(token, checks, keep_previous, found):
 
 
 def check_branches(token, checks, versions, now, keep_previous, found):
-    """Checks for unstable versions, against the commits on the branch the
-    package follows since the one nixpkgs has: outdated once one of them has
-    waited long enough, or there are enough of them (outdated_after)."""
+    """Run the checks for unstable versions, against the branch each follows.
+
+    A package is compared with the commits on its branch since the one
+    nixpkgs has: it's outdated once one of them has waited long enough, or
+    there are enough of them (outdated_after).
+    """
     queries = {}
     for name, check in checks.items():
         date = unstable_date(versions.get(name))
@@ -389,9 +444,17 @@ def check_branches(token, checks, versions, now, keep_previous, found):
 
 
 def interleaved(pages):
-    """The names of page checks ({name: check}) in an order that takes turns
-    between sites: one from each, then the next from each, ... so a site with
-    many rules isn't waited on back to back (http.pace)."""
+    """Order the page checks so they take turns between sites.
+
+    That's one from each site, then the next from each, and so on, so a
+    site with many rules isn't waited on back to back (http.pace).
+
+    Args:
+        pages: The page checks, {name: check}.
+
+    Returns:
+        The names, in that order.
+    """
     by_site = {}
     for name, check in pages.items():
         site = urllib.parse.urlsplit(check["url"]).netloc.lower()
@@ -403,12 +466,21 @@ def interleaved(pages):
 
 
 def check_page(name, check, keep_previous, found, safe=False, last=None):
-    """A check against a web page, e.g. a vendor's release notes. safe: a
-    community rule's page (http.get's safe mode). last: the row's last
-    result ("upstream"). If it read this same page with the same pattern,
-    the server is asked to send it only if it changed since (http.get_page):
-    if it hasn't, what was found then still holds, without downloading it
-    again (the Edge check's page is 1 MB, hourly)."""
+    """Run a check against a web page, such as a vendor's release notes.
+
+    When the last result read this same page with the same pattern, the
+    server is asked to send it only if it changed since (http.get_page).
+    When it hasn't, what was found then still holds, without downloading it
+    again (the Edge check's page is 1 MB, hourly).
+
+    Args:
+        name: The row's name.
+        check: The check.
+        keep_previous: add_checks' callback for a check that can't run.
+        found: add_checks' callback for a result.
+        safe: Whether it's a community rule's page (http.get's safe mode).
+        last: The row's last result ("upstream"), or None.
+    """
     url, pattern = check["url"], check["pattern"]
     last = last or {}
     cached = last.get("page") or {}

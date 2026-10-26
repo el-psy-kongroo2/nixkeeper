@@ -1,19 +1,12 @@
 // A package panel's sections, from the package alone (no page state):
 // its vulnerabilities, builds and what's on GitHub. Pure: a package in, HTML
 // out (tests/js/panel.test.mjs).
-import {
-  compareVersions,
-  cvePieces,
-  html,
-  onMaster,
-  raw,
-  safeUrl,
-  shortAge,
-  targetVersion,
-  VULN_COUNTED,
-  vulnFixes,
-} from './logic.js';
+import { shortAge } from './dates.js';
+import { html, raw, safeUrl } from './markup.js';
+import { onMaster, targetVersion, vulnFixes } from './status.js';
 import { BUILD_FAILED, fmt, GH_ICONS, icon, longDate, shortDay } from './ui.js';
+import { compareVersions } from './versions.js';
+import { cvePieces, VULN_COUNTED } from './vulns.js';
 
 // What each verdict on a CVE or advisory says (nixkeeper-vulnerabilities,
 // sources/vulnerabilities_digest.py); those in VULN_COUNTED count. Each:

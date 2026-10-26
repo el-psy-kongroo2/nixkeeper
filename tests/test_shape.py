@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from nixkeeper import datastore, shape
+from nixkeeper.naming import shard_of
 
 
 def row(name, **fields):
@@ -114,7 +115,7 @@ class Rows(unittest.TestCase):
         data[other]["packages"].append(row("a"))
         found = shape.problems(data)["rows"]
         self.assertIn("a: appears twice", found)
-        own = datastore.shard_of("a", 2)
+        own = shard_of("a", 2)
         self.assertIn(f"a: in {other}, but its shard is rows/{own}.json", found)
 
 
@@ -369,14 +370,31 @@ class Documented(unittest.TestCase):
         self.assertEqual(sorted(shape.ROW.keys() - named), [])
 
 
+class Typed(unittest.TestCase):
+    """ROW, as made from the Row type."""
+
+    def test_required_fields_are_row_fields(self):
+        self.assertLessEqual(shape.REQUIRED, shape.Row.__annotations__.keys())
+        self.assertEqual(
+            {name for name, field in shape.ROW.items() if field.required},
+            shape.REQUIRED,
+        )
+
+    def test_a_union_is_each_of_its_types(self):
+        self.assertEqual(shape.ROW["nixVersion"].types, (str, type(None)))
+        self.assertEqual(shape.ROW["notRefreshed"].types, (dict, list))
+        self.assertEqual(shape.ROW["name"], shape.Field((str,), required=True))
+
+
 class Report(unittest.TestCase):
     def test_how_many_and_the_first_few(self):
         out = io.StringIO()
-        shape.report({"rows": [f"r{n}: twice" for n in range(7)]}, out)
+        with mock.patch("sys.stderr", out):
+            shape.report({"rows": [f"r{n}: twice" for n in range(7)]})
         self.assertEqual(
             out.getvalue().splitlines(),
             [
-                "Data shape: 7 rows problems",
+                "warning: Data shape: 7 rows problems",
                 "  r0: twice",
                 "  r1: twice",
                 "  r2: twice",

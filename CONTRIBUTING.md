@@ -9,15 +9,18 @@ happen. For what nixkeeper does and how to set up your own, see the
 - `nixkeeper/`: the sync and the hourly checks, as a Python package (see
   [The code](#the-code))
 - `tests/`: offline tests, one file per module (nothing reaches the network:
-  sources are faked). `tests/js/` tests the page's rules (`page/logic.js`),
-  a package panel's sections (`page/panel.js`), how it reads its data
-  (`page/data.js`, with `fetch` stood in for), its address
-  (`page/state.js`), a package's panel (`page/package-view.js`, the parts
-  that are HTML), the overview (`page/overview.js`), a maintainer's page
-  (`page/maintainer-view.js`), what the list keeps (`page/filters.js`), the
-  list's rows and cells (`page/list.js`), the views' controls (wired onto
-  stand-in elements) and the search box's query (`page/search.js`) with
-  Node's own test runner
+  sources are faked). `tests/js/` tests the page's rules (one file per
+  module, `status.test.mjs` for `page/status.js` and so on), a package
+  panel's sections (`page/panel.js`), how it reads its data (`page/data.js`,
+  with `fetch` stood in for), its address (`page/state.js`), a package's
+  panel (`page/package-view.js`, the parts that are HTML), the overview
+  (`page/overview.js`), a maintainer's page (`page/maintainer-view.js`),
+  what the list keeps (`page/filters.js`), the list's rows and cells
+  (`page/row.js`), where the data is from (`page/sources.js`), the views'
+  controls (wired onto stand-in elements) and the search box's query
+  (`page/search.js`) with Node's own test runner. `tests/sh/` tests the
+  scripts' own logic: the Cloudflare deploy's retry
+  (`scripts/cloudflare.sh`), against a fake wrangler
 - `nix/package.nix`: nixkeeper's package, in nixpkgs' by-name style (the
   flake builds it from the checkout; see [Releasing](#releasing))
 - `nix/module.nix`: the NixOS module (`nixosModules.default`).
@@ -30,6 +33,8 @@ happen. For what nixkeeper does and how to set up your own, see the
 - `nix/package-lists.nix`: `nix flake check` validates the package lists
   against nixpkgs (typos, aliases like `python3Packages`, unknown maintainer
   handles, duplicates, malformed update checks, ignore and up-to-date rules)
+- `nix/checks/`: one file per flake check, each saying in its header what it
+  guards (`package-lists-checker/cases.nix` holds that check's test lists)
 - `package-lists/`: what this instance tracks (see
   [how it works](docs/how-it-works.md#what-gets-tracked))
 - `community/update-checks.nix`: the community update checks, rules anyone
@@ -40,44 +45,54 @@ happen. For what nixkeeper does and how to set up your own, see the
   lists them); `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
   `CHANGELOG.md` and `LICENSE` stay at the root, where GitHub looks for them
 - `page/`: the page (`index.html`, `app.js`, `style.css`), reading `data/`
-  from the `data` branch. `logic.js` holds its rules (statuses, versions,
-  ages, safe links, the tab icon's signals) without the page, so they can be
-  tested; `overview.js` the overview (the cards, trends, causes, sets,
-  fixes, nixpkgs in numbers); `maintainer-view.js` a maintainer's or team's
-  page (You can merge these, Can be closed) and the maintainers page;
-  `package-view.js` a package's panel (Details, Updates, Builds), given what
-  it needs of the page (`panelPage` in `app.js`: a package's address, hiding
-  it, drawing again); `panel.js` its sections (vulnerabilities, builds, On
-  GitHub), from the package alone, tested too; `ui.js` the small pieces of
-  HTML and text they and the list share (numbers, dates, icons, why a build
-  failed); `data.js` where the data is and how it's read (its files as JSON,
-  the shards' rows once each); `state.js` the filters, sort and paging in
-  one object (`state`), read from the address and written back (`readState`,
-  `writeState`), and a view's address (`scopeHref`, with the tables `app.js`
-  gives it in `known`); `list.js` the list (its header with the tiles,
-  refines and facets, Your packages and Your team, each row and its cells,
-  where the data is from); `filters.js` what the list keeps (the tiles'
-  filters, refines, sorts, platforms, and the list worked out with them);
-  `search.js` the search box as a query (`is:builds on:darwin`: parseQuery,
-  writeQuery, needsList: the words that open a list from the overview,
-  matchNote: what status: and ofteam: wait for) and
-  its menu (suggest, wireSearchMenu; the values and counts
-  from list.js's searchValues); `prefs.js` what this browser keeps (localStorage, the rows
-  hidden here); `store.js` what's loaded of the data, in one object
-  (`store`); `timing.js` each redraw's parts, with `?debug=timing`;
-  `app.js` imports them, changes the state, fills the store and
-  draws the page. Each view wires its own controls (`wireList`,
-  `wireOverview`, `wireMaintainerView`), given what they need of the page
-  (`pageHooks` in `app.js`); `app.js` keeps the search box's listeners, the
-  links between views, the theme menu and the keyboard. Native ES modules,
-  no build step: `index.html` preloads each (`modulepreload`), so a new
-  module goes there too. `favicon*.svg` (the mark, and the live status icons
-  the page switches between), `nixkeeper-lockup-tight*.svg` (the header) and
-  `tokens.css` are copies from `assets/brand/`, written by `nix run .#brand`.
-  `logic.js` also holds the page's HTML helpers:
+  from the `data` branch. Its rules are in modules that never touch the
+  page, so they can be tested, and that import only each other: `markup.js`
+  (HTML from data, escaped), `versions.js` (comparing versions), `dates.js`
+  (days and ages), `vulns.js` (vulnerabilities), `status.js` (a package's
+  status), `people.js` (maintainers and teams), `address.js` (the page's
+  addresses), `facets.js` (the names index) and `palette.js` (the palettes
+  and the tab icon's signal); `overview.js` the overview (the cards, trends,
+  causes, sets, fixes, nixpkgs in numbers); `maintainer-view.js` a
+  maintainer's or team's page (You can merge these, Can be closed) and the
+  maintainers page; `package-view.js` a package's panel (Details, Updates,
+  Builds), given what it needs of the page (`panelPage` in `app.js`: a
+  package's address, hiding it, drawing again); `panel.js` its sections
+  (vulnerabilities, builds, On GitHub), from the package alone, tested too;
+  `ui.js` the small pieces of HTML and text they and the list share
+  (numbers, dates, icons, why a build failed); `data.js` where the data is
+  and how it's read (its files as JSON, the shards' rows once each);
+  `state.js` the filters, sort and paging in one object (`state`), read from
+  the address and written back (`readState`, `writeState`), the list's own
+  (`listView`: whose packages, the folds opened), and a view's address
+  (`scopeHref`, with the tables `app.js` gives it in `known`); `list.js`
+  draws the list and wires it, from `list-controls.js` (its header with the
+  tiles, refines and facets, Your packages and Your team), `row.js` (each
+  row and its cells) and `sources.js` (where the data is from); `filters.js`
+  what the list keeps (the tiles' filters, refines, sorts, platforms, and
+  the list worked out with them); `search.js` the search box as a query
+  (`is:builds on:darwin`: parseQuery, writeQuery, needsList: the words that
+  open a list from the overview, matchNote: what status: and ofteam: wait
+  for) and its menu (suggest, wireSearchMenu; the values and counts from
+  list.js's searchValues); `prefs.js` what this browser keeps (localStorage,
+  the rows hidden here); `store.js` what's loaded of the data, in one object
+  (`store`); `timing.js` each redraw's parts, with `?debug=timing`; `app.js`
+  imports them, changes the state, fills the store and draws the page. Each
+  view wires its own controls (`wireList`, `wireOverview`,
+  `wireMaintainerView`), given what they need of the page (`pageHooks` in
+  `app.js`); `app.js` keeps the search box's listeners, the links between
+  views, the theme menu and the keyboard. Native ES modules, no build step:
+  `index.html` preloads each (`modulepreload`), so a new module goes there
+  too. `favicon*.svg` (the mark, and the live status icons the page switches
+  between), `nixkeeper-lockup-tight*.svg` (the header) and `tokens.css` are
+  copies from `assets/brand/`, written by `nix run .#brand`. `markup.js`
+  holds the page's HTML helpers:
   - `html`: a template tag that escapes every value except markup made
     with `html` itself
   - `raw`: markup the page writes itself, never text from the data
+  - `setHtml` and `appendHtml`: the only way the page writes markup into an
+    element, taking only what `html` or `raw` made. A Biome plugin
+    (`biome-plugins/no-raw-html.grit`, in `checks.lint`) fails on
+    `innerHTML`, `outerHTML` or `insertAdjacentHTML` anywhere else
   - `capitalized`: capitalizes a text's first letter, keeping it escaped
     (the names in `LOWERCASE_NAMES`, nixkeeper's and nixpkgs', stay lowercase)
   - `withoutLeadingJoiner`: takes the joining punctuation ("— ", ", ") off
@@ -117,16 +132,26 @@ happen. For what nixkeeper does and how to set up your own, see the
 ## The code
 
 `nixkeeper/cli.py` is the `nixkeeper` command: it reads the flags and runs
-the subcommand's module. `nixkeeper/sync.py` runs one sync, top to bottom:
-its `main()` calls a function per phase (`start`, `repology`,
-`own_sources_and_lists`, `update_checks`, `builds`, `update_bot`,
-`github_and_staging`, `vulnerabilities_and_fixes`, `write`,
-`notify_changes`: the names its log times them by), each given the `Run`
-(made once by `start`: the time, the channel's index and revision, the
-lists, the last run, what's tracked) and, once the rows exist, the `Scope`
-(which rows each step covers: the lists' apart from the rest with every
-package). What only an instance of every package writes is
-`every_package_outputs`'. The steps, and their modules:
+the subcommand's module. It's also the only place nixkeeper exits: code
+below it raises `errors.Problem` for something its user has to fix (no
+lists, no data yet, too many packages), and `cli.main` prints the message
+and exits with status 1. Code that can carry on without what's missing
+catches `Problem` instead. `nixkeeper/sync.py` runs one sync, top to bottom:
+its `main()` calls one function per phase, in the order its module
+docstring lists them (the names its log times them by), each given the
+`Run` (what the sync works from, made once by `start`) and, once the rows
+exist, the `Scope` (which rows each phase covers). A row's verdict
+(`nixStatus`, `refVersion`) is decided in one place, `verdict.py`: each
+source records what it found on the row, then calls `verdict.decide`,
+which works the verdict out again from Repology's (kept as
+`repologyVerdict` while they differ) through its `RULES`, in their order.
+A new way of changing the verdict is a new rule there, and a test checks
+that nothing else writes it. Some steps still depend on the order, as
+they read the verdict while they record (an up-to-date rule is checked
+against the verdict so far): `tests/test_phase_order.py` lists them in
+the order `sync.py` calls them, and fails when one moves. Moving one on
+purpose means updating that list, and the test showing what the pair's
+order changes. The steps, and the modules they use:
 
 | Step | Module |
 |---|---|
@@ -141,7 +166,7 @@ package). What only an instance of every package writes is
 | where nixpkgs marks them broken, and Hydra's builds | `sources/nixpkgs.py`, `sources/hydra.py` |
 | the nixpkgs-update bot's latest attempts | `sources/nixpkgs_update.py` |
 | open PR and issue counts, and update PRs | `sources/github.py` |
-| check `data/` against its shape, then write it | `shape.py`, `datastore.py` |
+| check `data/` against its shape, then write it | `shape.py`, `datastore/` |
 | rewrite the status issue, commenting on what's newly wrong | `notify.py`, `changes.py` |
 
 Around that:
@@ -155,34 +180,79 @@ Around that:
   shipped in the package like the page): opting in, merging with the lists'
   own, and the limits community rules are held to (with `sources/http.py`'s
   safe mode)
-- `datastore.py`: writing and reading `data/`. A full sync builds a new
-  folder and swaps it in (`write`); the hourly checks rewrite only the
-  files that changed and remove those under `rows/` and `views/` they no
-  longer write (`update`). A file the daily sync keeps there besides
-  those (`sync.kept_files`, such as `views/merge.json`) must be listed in
-  `SYNC_ONLY`, or the hourly checks would delete it: `write` refuses one
-  that isn't, and a test checks every file `sync.kept_files` keeps
+- `community_check.py`: `nixkeeper community-check`, which runs the
+  community's rules for real, finds the ignore and up-to-date rules that
+  no longer do anything, and keeps the community rules' status issue up
+  to date
+- `rows.py`: a row starts from Repology's verdict on nixpkgs' entry, which
+  each of `CORRECTIONS` corrects in turn where it doesn't fit nixpkgs (an
+  older series compared within itself, a release word, a commit, ...).
+  Each correction is a function of the row and what Repology found
+  (`_Found`), changing the row in place; the order matters, as each reads
+  the row the ones before it left. A new correction is a new function,
+  listed in `CORRECTIONS` (a test checks each one is)
+- `datastore/`: writing and reading `data/`, through the names its
+  `__init__.py` gives (`datastore.write`, `datastore.load`, ...), in five
+  modules:
+  - `shards.py`: the rows' shards and the summary entry each row has
+  - `facts.py`: what each row says (its status letter, highlights, facets,
+    the counts)
+  - `trends.py`: the history, fixed and events records, kept run to run
+  - `view_files.py`: the views the overview reads, with every package
+  - `folder.py`: writing, swapping and reading `data/`
+
+  A full sync builds a new folder and swaps it in (`write`); the hourly
+  checks rewrite only the files that changed and remove those under `rows/`
+  and `views/` they no longer write (`update`). A file the daily sync keeps
+  there besides those (`sync.kept_files`, such as `views/merge.json`) must
+  be listed in `SYNC_ONLY`, or the hourly checks would delete it: `write`
+  refuses one that isn't, and a test checks every file `sync.kept_files`
+  keeps. With every package, `views` builds the views, `names.json`,
+  `facets.json`, `maintainers.json` and the manifest's counts in one pass,
+  with one collector per output (`_Views`, `_Counts`, `_Sets`, ...): each
+  takes every row and decides whether it counts. A new output is a new
+  collector
 - `lock.py`: one run at a time on a data folder (`<data dir>.lock`), for
   every command that writes or copies the data. Holding it is also when a
   swap a run didn't finish is tidied up (`datastore.restore_interrupted_swap`):
   reading the data (`datastore.load`) never changes the folder
 - `naming.py`: how the data's files are named (`slug` for a team's or list's
   view, `shard_of` and `SHARD_FILE` for a row's shard), shared by
-  `datastore.py`, which writes them, and `shape.py`, which checks them
+  `datastore/`, which writes them, and `shape.py`, which checks them
+- `log.py`: what the commands say as they run, on standard error: `info`,
+  and `notice` and `warn` (GitHub Actions' annotations there, escaped;
+  `notice: ` and `warning: ` lines elsewhere, at those priorities in a
+  systemd journal), and `group` to fold lines under a title (indented
+  elsewhere; not nested). Whether it runs on GitHub Actions is
+  `config.on_github_actions()`, which the tests turn off
+  (`tests/__init__.py`) and a test of GitHub's form patches on. Nothing
+  else names `sys.stderr`, prints to a file (one the code writes itself
+  takes `f.write`) or writes a workflow command (a test checks it);
+  standard output is what a command prints as its answer
 - `timing.py`: how long each phase of a sync took (`Phases`: a `lap` after
   each step of `sync.py`), in its log at the end, the longest first
 - `shape.py`: what `data/` must look like, checked before each write (the
-  sync's and the hourly checks'). It never raises on bad data, which is
-  what it looks for, and a fault in the check itself is logged without
-  stopping the write: a row's fields and their types (`ROW`:
-  a field added to the rows is added there and to `docs/data.md`, which a
-  test holds to it), and the manifest's counts against the views they
-  count. For now its problems are reported in the log (`Data shape: ...`)
+  sync's and the hourly checks'). It never raises on bad data, which is what
+  it looks for, and a fault in the check itself is logged without stopping
+  the write: a row's fields and their types (`Row`, a `TypedDict`, from
+  which `ROW` is made: a field added to the rows is added there and to
+  `docs/data.md`, which a test holds to it), and the manifest's counts
+  against the views they count. For now its problems are reported in the log
+  (`Data shape: ...`)
 - `page.py`: `nixkeeper page` and `nixkeeper serve`. The package carries the
   page: its build copies `page/` into `nixkeeper/page/` (and links it as
   `share/nixkeeper/www/`); from a checkout, `page/` itself
 - `versions.py`: comparing version strings
 - `sources/http.py`: GET with retries, for the sources that need no more
+- `sources/digests.py`: what every digest reader shares: reading a digest's
+  `meta.json`, its other files or a file that describes itself, checking
+  its format and age, and giving up on it when it can't be read or is too
+  old (the note for the sources panel, the warning)
+- `sources/nixpkgs_update.py`: the update bot's attempts, in two parts.
+  `_Finder` finds each row's (from the updates digest, the logs, or the
+  last sync's when the row isn't read this time); `judge` then decides
+  what the latest means, from nixpkgs' state and the rules (superseded,
+  ignored), and needs no network to test
 - `frequent.py`, `prcheck.py`: the hourly checks, which start from the last
   published data and publish through `partial.py` only when a row changed
 
@@ -199,16 +269,20 @@ nix run .#pr-check        # outdated packages' update PRs, against data/ (hourly
 nix run .#sync -- --help  # the command's flags (each app passes its arguments on)
 nix run . -- paths        # the command as installed: your own folders, not the checkout's
 nix fmt                   # format everything (Nix, Python, the page), and sort the lists
-nix flake check           # tests, formatting, linters, package-list checks
+nix flake check           # tests, formatting, linters (mypy too), package-list checks
 nix develop -c python3 -m unittest discover -s tests -t .   # tests, quickly
 nix develop -c node --test 'tests/js/*.test.mjs'            # the page's tests
+bash tests/sh/cloudflare.sh                                  # the deploy script's retry
 nix run .#community-check -- <attribute>   # try a community update check for real
 nix eval --json -f package-lists                             # what the lists evaluate to
 nix run .#screenshots -- --browser google-chrome   # retake the screenshots in assets/screenshots/
 nix run .#brand           # regenerate assets/brand/ and the page's favicon
 ```
 
-New files must be `git add`ed before Nix sees them.
+New files must be `git add`ed before Nix sees them. Each flake check reads
+only its own files (its `checkSource` list in `flake.nix`), so an edit
+elsewhere doesn't run it again. A check that starts reading another file
+needs it added to that list; otherwise the check can't find it.
 
 Where the time goes: a sync's log ends with its phases, the longest first
 (`Phases: 1 min 17 s in all`, then each one's time and share). The page
@@ -254,6 +328,16 @@ sentences.
   `typing works out less`). Every commit ends with an `Assisted-by:` line
   when an AI assistant helped.
 
+A function that reads or writes a row's fields takes it as `row: Row`
+(`shape.Row`): mypy, in `nix flake check`, then holds it to the row's
+fields and their types, and a misspelt field or a wrong type fails the
+check. Only annotated functions are checked: for now, those that build a
+row's verdict (a test holds each step in `tests/test_phase_order.py` to
+it). mypy checks names and types, not presence: reading a field that may
+be missing still needs `row.get(...)`. And a misspelt `row.get(...)` is
+caught only where its value is used (it reads as `object`), not where
+it's only tested for truth.
+
 For example, from `nixkeeper/shape.py`:
 
 ```python
@@ -268,8 +352,12 @@ def row_problems(row):
     """
 ```
 
-Older code is being rewritten to this style module by module; new and
-changed code follows it already.
+All of `nixkeeper/` follows it, and ruff's pydocstyle rules (`D`, with the
+Google convention) check it in `nix flake check` (`checks.lint`): public
+modules, classes and functions have a docstring, and its first line is its
+whole summary. A `_private` or nested helper needs one only when its name
+and arguments don't say enough: a docstring that just repeats the name isn't
+wanted.
 
 ## Screenshots
 
@@ -329,7 +417,9 @@ nix run .#brand
 
 runs all three in order (fetching the wordmark's font first) and copies the
 favicons, the header's lockups and the tokens to `page/`, for the page.
-Commit the regenerated files with the change to the scripts.
+Commit the regenerated files with the change to the scripts. `page/`'s brand
+files are copies, and `nix flake check` fails when one of them, or
+`assets/brand/`'s tokens, differs from what it's made from.
 
 The page's own colours (`page/style.css`) are variables that point at the
 tokens' roles, e.g. `--accent: var(--nk-link-text)`, so a change to the

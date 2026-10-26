@@ -8,7 +8,8 @@ import socket
 import unittest
 from unittest import mock
 
-from nixkeeper import cli, community, config
+from nixkeeper import cli, community, community_check, config
+from nixkeeper.errors import Problem
 from nixkeeper.sources import http, upstream
 
 NOW = "2026-10-01T06:00:00+00:00"
@@ -107,7 +108,7 @@ class StaleIgnores(unittest.TestCase):
             ),
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            return community.stale_ignores(names)
+            return community_check.stale_ignores(names)
 
     def test_a_rule_that_still_applies(self):
         found = self.stale(
@@ -152,7 +153,7 @@ class StaleIgnores(unittest.TestCase):
             ),
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            self.assertEqual(community.stale_ignores(), {})
+            self.assertEqual(community_check.stale_ignores(), {})
 
 
 PACVIM = {"version": "2018-05-16", "newest": "1.1.1", "reason": "A snapshot."}
@@ -229,7 +230,7 @@ class StaleUpToDate(unittest.TestCase):
             mock.patch("nixkeeper.sources.repology.resolve", side_effect=resolve),
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            return community.stale_up_to_date(names)
+            return community_check.stale_up_to_date(names)
 
     INDEX = {
         "pacvim": {"version": "2018-05-16", "meta": {}},
@@ -394,7 +395,7 @@ class RunForReal(unittest.TestCase):
             mock.patch.object(http, "get_page", return_value=(page, {})),
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            return community.run(names)
+            return community_check.run(names)
 
     def test_every_rule(self):
         results = self.run_rules()
@@ -420,7 +421,7 @@ class RunForReal(unittest.TestCase):
             mock.patch("sys.stdout", io.StringIO()),
             mock.patch.dict(os.environ, {}, clear=True),
         ):
-            failed = community.report({"a": ("1.0", None), "b": (None, "moved")})
+            failed = community_check.report({"a": ("1.0", None), "b": (None, "moved")})
         self.assertEqual(failed, 1)
 
 
@@ -533,9 +534,9 @@ class StatusIssue(unittest.TestCase):
             ) as update,
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            community.publish(results, now=self.NOW)
+            community_check.publish(results, now=self.NOW)
         repo, token, title, new_body, comment = update.call_args.args
-        self.assertEqual(update.call_args.kwargs["label"], community.ISSUE_LABEL)
+        self.assertEqual(update.call_args.kwargs["label"], community_check.ISSUE_LABEL)
         return new_body, comment
 
     def test_all_working(self):
@@ -545,7 +546,9 @@ class StatusIssue(unittest.TestCase):
         self.assertIsNone(comment)
 
     def test_ignore_rules_that_can_go(self):
-        stale = {"xskat": [("4.0-9", "the bot's latest attempt is at 4.1")]}
+        stale_ignore_rules = {
+            "xskat": [("4.0-9", "the bot's latest attempt is at 4.1")]
+        }
         env = {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "nixkeeper/nixkeeper"}
         with (
             mock.patch.dict(os.environ, env, clear=True),
@@ -555,12 +558,14 @@ class StatusIssue(unittest.TestCase):
             ) as update,
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            community.publish({"a": ("1.0", None)}, stale, now=self.NOW)
+            community_check.publish(
+                {"a": ("1.0", None)}, stale_ignore_rules, now=self.NOW
+            )
         body = update.call_args.args[3]
         self.assertIn("| `xskat` | 4.0-9 | the bot's latest attempt is at 4.1 |", body)
 
     def test_up_to_date_rules_that_can_go(self):
-        stale_up = {"pacvim": ("2018-05-16", "nixpkgs is now at 1.1.1")}
+        stale_up_to_date_rules = {"pacvim": ("2018-05-16", "nixpkgs is now at 1.1.1")}
         env = {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "nixkeeper/nixkeeper"}
         with (
             mock.patch.dict(os.environ, env, clear=True),
@@ -570,10 +575,10 @@ class StatusIssue(unittest.TestCase):
             ) as update,
             mock.patch("sys.stderr", io.StringIO()),
         ):
-            community.publish(
+            community_check.publish(
                 {"a": ("1.0", None)},
-                stale=None,
-                stale_up_to_date=stale_up,
+                stale_ignore_rules=None,
+                stale_up_to_date_rules=stale_up_to_date_rules,
                 now=self.NOW,
             )
         body = update.call_args.args[3]
@@ -598,13 +603,13 @@ class StatusIssue(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/r"}, clear=True),
             mock.patch("nixkeeper.sources.github.token", return_value=None),
-            self.assertRaises(SystemExit),
+            self.assertRaises(Problem),
         ):
-            community.publish({}, now=self.NOW)
+            community_check.publish({}, now=self.NOW)
 
     def test_track_only_counts_rules_that_ran(self):
         previous = {"gone": {"since": "x", "reason": "y"}}
-        broken, newly, recovered = community.track(
+        broken, newly, recovered = community_check.track(
             {"a": ("1.0", None)}, previous, self.NOW
         )
         self.assertEqual((broken, newly, recovered), ({}, [], []))
@@ -632,7 +637,7 @@ class ChangedInAPullRequest(unittest.TestCase):
             mock.patch.object(community, "rules", side_effect=read),
             mock.patch("os.path.exists", return_value=True),
         ):
-            checks, ignored = community.changed("main")
+            checks, ignored = community_check.changed("main")
         self.assertEqual(checks, ["new", "wesnoth-devel"])
         self.assertEqual(ignored, ["foo"])
 
@@ -645,7 +650,12 @@ class InTheChecks(unittest.TestCase):
 
     def rows(self):
         return [
-            {"name": "google-chrome", "nixVersion": "154.0.1", "refVersion": "154.0.1"}
+            {
+                "name": "google-chrome",
+                "nixVersion": "154.0.1",
+                "nixStatus": "newest",
+                "refVersion": "154.0.1",
+            }
         ]
 
     def test_a_community_rule_is_fetched_safely_and_marked(self):

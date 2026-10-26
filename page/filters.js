@@ -4,36 +4,31 @@
 // worked out with them (currentFiltered) and put in order (sortedList).
 // The state says which are picked; app.js draws the list.
 
+import { VIEWS } from './address.js';
+import { inPickedSet, nameSet } from './facets.js';
+import { maintainersKeep, matchesSearch, searchHandle, teamsKeep } from './people.js';
+import { isHidden } from './prefs.js';
+import { searchText } from './search.js';
+import { attentionRank, buildsWith, failedBuilds, hasFailure, known, state } from './state.js';
 import {
   botWontUpdate,
   buildFailedBecause,
   computeStatus,
   failedBecause,
-  inPickedSet,
-  isVulnerable,
-  maintainersKeep,
-  matchesSearch,
   NEVER_BUILT,
-  nameSet,
   olderThan,
   onBranch,
   onPlatform,
   problemSince,
-  searchHandle,
-  severityRank,
   targetVersion,
-  teamsKeep,
   unbuiltOn,
   unbuiltWhere,
-  VIEWS,
-  versionGap,
   waitingForChannel,
-} from './logic.js';
-import { isHidden } from './prefs.js';
-import { searchText } from './search.js';
-import { attentionRank, buildsWith, failedBuilds, hasFailure, known, state } from './state.js';
+} from './status.js';
 import { store } from './store.js';
 import { failingSince } from './ui.js';
+import { versionGap } from './versions.js';
+import { isVulnerable, severityRank } from './vulns.js';
 
 // Its own state: what every filter but the facets kept, the last time the
 // list was worked out (facetBase: the facets count over it, with no second
@@ -42,7 +37,7 @@ export const filtering = { facetBase: [], showHidden: false };
 
 export const inSet = (pkg) => !state.setFilter || pkg.set === state.setFilter;
 
-// ?in=: one package set, by the attribute's first part (logic.js nameSet:
+// ?in=: one package set, by the attribute's first part (facets.js nameSet:
 // python313Packages, vimPlugins, top-level); ?by=: one maintainer's
 // packages within the list shown (a handle, lowercase). Counted, with the
 // platforms, over the list's other filters (facetOptions).

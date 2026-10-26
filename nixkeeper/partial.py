@@ -1,29 +1,52 @@
-"""Shared by the hourly checks (frequent.py, prcheck.py): each starts from the
-last published data, changes a few rows, and publishes only if something
-changed. Most hours nothing does, so nothing is written, committed or posted."""
+"""Load and publish the data for the hourly checks.
+
+The hourly checks (frequent.py, prcheck.py) each start from the last
+published data, change a few rows, and publish only if something changed.
+Most hours nothing does, so nothing is written, committed or posted.
+"""
 
 import copy
-import sys
 
-from . import config, datastore, history, notify
+from . import config, datastore, history, log, notify, verdict
+from .errors import Problem
 
 
 def load():
-    """(the last published index, a copy of its rows to change). Exits if
-    there's none: the daily sync has to have run once."""
+    """Load the last published data, and a copy of its rows to change.
+
+    Returns:
+        (the last published index, a deep copy of its rows), or None when
+        its rows can't be decided again (verdict.decidable): written by an
+        older nixkeeper, they wait for a full sync with this one.
+
+    Raises:
+        Problem: There's no published data: the daily sync has to have
+            run once.
+    """
     previous = history.load_previous_run()
     if not previous["packages"]:
-        sys.exit(
-            f"No previous run in {config.OUT_DIR}: run the full sync first "
+        raise Problem(
+            f"No previous run in {config.data_dir()}: run the full sync first "
             "(nixkeeper sync; from a checkout, nix run .#sync)."
         )
+    if not verdict.decidable(previous):
+        log.notice(
+            "The data was written by an older nixkeeper "
+            f"({previous.get('version') or 'unknown'}), before its rows kept "
+            "Repology's verdict: nothing is published until a full sync with "
+            "this one."
+        )
+        return None
     return previous, copy.deepcopy(previous["packages"])
 
 
 def meaningful(packages):
-    """packages without what changes every run anyway (when an update check
-    last succeeded and its rule's fingerprint, when Repology was asked), to
-    tell whether anything worth publishing changed."""
+    """Return packages without what changes every run anyway.
+
+    That's when an update check last succeeded and its rule's fingerprint,
+    and when Repology was asked. What's left tells whether anything worth
+    publishing changed.
+    """
     packages = copy.deepcopy(packages)
     for row in packages:
         (row.get("upstream") or {}).pop("checkedAt", None)
@@ -33,12 +56,22 @@ def meaningful(packages):
 
 
 def publish(previous, packages, now, data_files=None):
-    """Write packages (and data_files: Repology entries by dataFile, for the
-    rows refreshed) and notify, if anything changed.
-    checkedAt stays the daily sync's: the page's staleness warning, and every
-    source these checks don't touch, go by it. Returns whether it wrote."""
+    """Write the changed rows and notify, if anything changed.
+
+    checkedAt stays the daily sync's: the page's staleness warning, and
+    every source these checks don't touch, go by it.
+
+    Args:
+        previous: The last published index.
+        packages: The rows, as changed.
+        now: The run's time.
+        data_files: Repology entries by dataFile, for the rows refreshed.
+
+    Returns:
+        Whether it wrote.
+    """
     if meaningful(packages) == meaningful(previous["packages"]):
-        print("Nothing changed.", file=sys.stderr)
+        log.info("Nothing changed.")
         return False
     # Every row's entries, for the shards: the last run's, or refreshed.
     saved = datastore.saved_entries()
@@ -55,7 +88,7 @@ def publish(previous, packages, now, data_files=None):
     datastore.update(
         {**previous, "packages": packages}, {**entries, **(data_files or {})}
     )
-    print("Changes written.", file=sys.stderr)
+    log.info("Changes written.")
     # The instance's own issue: what changed for the lists' packages (with
     # every package, the lists' own only); the subscribers' (notifications/):
     # theirs among every row, and only theirs that newly need attention (the

@@ -1,64 +1,61 @@
-"""Hydra's builds of a branch that updates a set before it reaches master,
+"""Read Hydra's builds of the branches that come before master.
+
+haskell-updates is where the Haskell team updates haskellPackages
+(hackage2nix), merging into master about every two weeks. Its builds come
 from nixkeeper-hydra's digest of it (https://github.com/nixkeeper/
-digest-builds: data/haskell-updates.json.gz): haskell-updates, where the Haskell
-team updates haskellPackages (hackage2nix) and merges into master about
-every two weeks. A row with a job there gets what the branch has ("branch":
-its version, its build and how it went), so the page can say an update is
-waiting for the branch's merge, or a failure is fixed there (or isn't). It
-changes no count: the branch is a preview of master.
+digest-builds: data/haskell-updates.json.gz). A row with a job there gets
+what the branch has ("branch": its version, its build and how it went), so
+the page can say an update is waiting for the branch's merge, or a failure
+is fixed there (or isn't). It changes no count: the branch is a preview of
+master.
 
-And staging-next (staging-next.json.gz, its differences from master), for
-the updates merged into it (stagingPR): how each builds there, on every
-platform, as of Hydra's newest evaluation of it."""
+staging-next (staging-next.json.gz, its differences from master) is read
+for the updates merged into it (stagingPR): how each builds there, on every
+platform, as of Hydra's newest evaluation of it. It also gives a forecast of
+what staging-next will break or block once it's merged.
+"""
 
-import gzip
-import json
 import re
-import sys
-import urllib.error
-from datetime import datetime, timedelta
 
-from .. import config
+from .. import config, log
 from ..versions import is_newer, version_key
-from . import about, http
+from . import about, digests
 
+# The files' format this nixkeeper reads.
 FORMAT = 1
 # Each branch nixkeeper reads: its file in the hydra digest, and which
 # attributes it builds.
 BRANCHES = {"haskell-updates": "haskellPackages."}
 SYSTEM = "x86_64-linux"  # the branches' jobsets build only it
-# A branch's file is read at least daily (when the branch hasn't changed):
-# older, nixkeeper-hydra has stopped reading it.
+# A branch's file is read at least daily, even when the branch hasn't
+# changed: one older than this means nixkeeper-hydra has stopped reading it.
 MAX_AGE_HOURS = 48
 
 
 def wanted(attrs):
-    """The branches some of attrs (the tracked ones) are built on."""
+    """Return the branches some of attrs, the tracked ones, are built on."""
     return [
         b for b, prefix in BRANCHES.items() if any(a.startswith(prefix) for a in attrs)
     ]
 
 
 def load(branch, now):
-    """{attr: {"version", "status", "build"}} for branch's jobs on SYSTEM,
-    or None (saying why) when the hydra digest is turned off, or the file
-    isn't there, isn't current or can't be read."""
+    """Read branch's jobs on SYSTEM.
+
+    Returns:
+        {attr: {"version", "status", "build"}}, or None when the hydra
+        digest is turned off, or (with the reason in the log) the file isn't
+        there, isn't current or can't be read.
+    """
     base = config.HYDRA_DIGEST_URL
     if not base:
         return None
     source = f"branch:{branch}"
     try:
-        body = http.get_bytes(f"{base}{branch}.json.gz")
-        if body is None:
-            raise ValueError(f"no {branch}.json.gz yet")
-        found = json.loads(gzip.decompress(body))
-        if found.get("format") != FORMAT:
-            raise ValueError("not in a format this nixkeeper reads")
+        found = digests.read_json_gz(base, f"{branch}.json.gz", FORMAT)
         at = found["fetchedAt"]
-        age = datetime.fromisoformat(now) - datetime.fromisoformat(at)
-        if age > timedelta(hours=MAX_AGE_HOURS):
-            about.note(source, False, "too old", at=at)
-            print(f"::warning::{branch}: not used, read {at}", file=sys.stderr)
+        if digests.hours_since(at, now) > MAX_AGE_HOURS:
+            digests.too_old(source, branch, at)
             return None
         columns = found["columns"]
         jobs = {}
@@ -73,21 +70,18 @@ def load(branch, now):
                 "status": job["status"],
                 "build": job["build"],
             }
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        about.note(source, False, f"couldn't be read ({e})")
-        print(f"::warning::{branch}: couldn't use it ({e})", file=sys.stderr)
+    except digests.FAILURES as e:
+        digests.give_up(source, branch, e)
         return None
-    print(
-        f"{branch}: evaluation {found['eval']}, {len(jobs):,} jobs, read {at}",
-        file=sys.stderr,
-    )
+    log.info(f"{branch}: evaluation {found['eval']}, {len(jobs):,} jobs, read {at}")
     about.note(source, True, at=at, eval=found["eval"], jobs=len(jobs))
     return jobs
 
 
-# staging-next (since 2026-10-16): all of nixpkgs, its differences from
-# master only (digest-builds' branches.py), read for the updates on their
-# way there (prs_digest.add_staging_prs) on every platform Hydra builds.
+# staging-next, read since 2026-10-16: all of nixpkgs, but only its
+# differences from master (digest-builds' branches.py), for the updates on
+# their way there (prs_digest.add_staging_prs), on every platform Hydra
+# builds.
 STAGING_NEXT = "staging-next"
 # The version at the end of what a job builds: from the first part starting
 # with a digit (imagemagick-7.1.2-34, python3.13-uharfbuzz-0.56.2,
@@ -96,25 +90,21 @@ NAME_VERSION = re.compile(r"-(\d[^-]*(?:-[^-]*)*)$")
 
 
 def load_staging_next(now):
-    """({(attr, system): {"name", "status", "build"}}, {"eval",
-    "evaluatedAt"}) of staging-next's newest evaluation, or None (saying
-    why) as load."""
+    """Read staging-next's newest evaluation.
+
+    Returns:
+        ({(attr, system): {"name", "status", "build", "blockedBy"}},
+        {"eval", "evaluatedAt"}), or None as load returns it.
+    """
     base = config.HYDRA_DIGEST_URL
     if not base:
         return None
     source = f"branch:{STAGING_NEXT}"
     try:
-        body = http.get_bytes(f"{base}{STAGING_NEXT}.json.gz")
-        if body is None:
-            raise ValueError(f"no {STAGING_NEXT}.json.gz yet")
-        found = json.loads(gzip.decompress(body))
-        if found.get("format") != FORMAT:
-            raise ValueError("not in a format this nixkeeper reads")
+        found = digests.read_json_gz(base, f"{STAGING_NEXT}.json.gz", FORMAT)
         at = found["fetchedAt"]
-        age = datetime.fromisoformat(now) - datetime.fromisoformat(at)
-        if age > timedelta(hours=MAX_AGE_HOURS):
-            about.note(source, False, "too old", at=at)
-            print(f"::warning::{STAGING_NEXT}: not used, read {at}", file=sys.stderr)
+        if digests.hours_since(at, now) > MAX_AGE_HOURS:
+            digests.too_old(source, STAGING_NEXT, at)
             return None
         columns = found["columns"]
         jobs = {}
@@ -129,27 +119,32 @@ def load_staging_next(now):
                 "blockedBy": (job.get("blockedBy") or "").split(),
             }
         info = {"eval": found["eval"], "evaluatedAt": found.get("evaluatedAt")}
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        about.note(source, False, f"couldn't be read ({e})")
-        print(f"::warning::{STAGING_NEXT}: couldn't use it ({e})", file=sys.stderr)
+    except digests.FAILURES as e:
+        digests.give_up(source, STAGING_NEXT, e)
         return None
-    print(
+    log.info(
         f"{STAGING_NEXT}: evaluation {found['eval']} "
         f"({info['evaluatedAt'] or 'date unknown'}), {len(jobs):,} jobs differing "
-        f"from master, read {at}",
-        file=sys.stderr,
+        f"from master, read {at}"
     )
     about.note(source, True, at=at, jobs=len(jobs), **info)
     return jobs, info
 
 
 def current_staging_next(found, last_merged):
-    """found (load_staging_next's), unless its evaluation was made before
-    the last staging-next cycle was merged into master (last_merged: the
-    PR digest's {"merged", ...}): that cycle is master's now, and what the
-    evaluation said of it (what it breaks, what blocks it) has happened or
-    not there. None then, until Hydra evaluates the next cycle (2026-10-16:
-    evaluation 1830329 at 17:14, #571813 merged at 19:04)."""
+    """Return found, unless it's of the staging-next cycle merged into master.
+
+    An evaluation made before the last staging-next cycle was merged is of
+    that cycle, which is master's now: what the evaluation said of it (what
+    it breaks, what blocks it) has happened there or not. None then, until
+    Hydra evaluates the next cycle (2026-10-16: evaluation 1830329 at
+    17:14, #571813 merged at 19:04).
+
+    Args:
+        found: load_staging_next's result, or None.
+        last_merged: The PR digest's last staging-next merge, {"merged",
+            ...}, or None.
+    """
     if not found or not (last_merged or {}).get("merged"):
         return found
     _, info = found
@@ -161,24 +156,29 @@ def current_staging_next(found, last_merged):
             f"evaluation {info.get('eval')} is of the cycle merged into master "
             f"on {last_merged['merged'][:10]}",
         )
-        print(
+        log.info(
             f"{STAGING_NEXT}: evaluation {info.get('eval')} ({made}) is before "
             f"the merge of #{last_merged.get('n')} ({last_merged['merged']}): "
-            "not used",
-            file=sys.stderr,
+            "not used"
         )
         return None
     return found
 
 
 def apply_staging_next(rows, found):
-    """Give each row's update on staging-next (its stagingPR "on"
-    staging-next) how it builds there, from found (load_staging_next's):
-    "builds", [{"system", "status", "build"}] of its attributes' jobs at
-    the PR's version, or at a newer one when staging-next has moved past it
-    ("evalVersion": that version, harfbuzz 14.5.1 for a PR to 14.5.0), or
-    none when the evaluation has neither (merged since: "inEval" false);
-    and "eval", which evaluation and when."""
+    """Give each row's update on staging-next how it builds there.
+
+    That's for a row whose stagingPR is "on" staging-next. The PR gets
+    "builds", [{"system", "status", "build"}] of its attributes' jobs at its
+    version, each platform once; or at a newer version when staging-next
+    has moved past it ("evalVersion", such as harfbuzz 14.5.1 for a PR to
+    14.5.0); or none when the evaluation has neither (merged since:
+    "inEval" false). "eval" says which evaluation, and when.
+
+    Args:
+        rows: The rows, changed in place.
+        found: load_staging_next's result, or None (then nothing changes).
+    """
     if not found:
         return
     jobs, info = found
@@ -190,8 +190,8 @@ def apply_staging_next(rows, found):
         if not pr or pr.get("on") != STAGING_NEXT:
             continue
         theirs = [j for a in row.get("attrs") or [] for j in by_attr.get(a, [])]
-        # At the PR's version: what it builds, name-version (imagemagick-
-        # 7.1.2-34, python3.13-hatchling-1.32.0).
+        # The jobs at the PR's version, by what they build, a name-version
+        # (imagemagick-7.1.2-34, python3.13-hatchling-1.32.0).
         at = [j for j in theirs if j["name"].endswith(f"-{pr['to']}")]
         pr.pop("evalVersion", None)
         if not at:
@@ -218,14 +218,23 @@ def apply_staging_next(rows, found):
 
 
 def apply_staging_next_breaks(rows, found, cycle=None):
-    """Give each row staging-next breaks ("stagingNextBreaks"): a job of it
-    that fails its own build in staging-next's newest evaluation (not a
-    dependency's failure) at the very version master builds fine (not an
-    update of it in progress there). Unless fixed, master fails the same
-    when staging-next is merged into it. {"eval", "evaluatedAt", "builds":
-    [{"attr", "system", "build"}]}, and "cycle", the open staging-next PR
-    ({"n", "cut"}) when known. found: load_staging_next's (none: rows keep
-    none). A forecast: it changes no count."""
+    """Mark the rows staging-next will break once it's merged.
+
+    A row's job breaks when it fails its own build in staging-next's newest
+    evaluation (not a dependency's failure), at the same version master
+    builds fine (not an update of it in progress there). Unless that's
+    fixed, master fails the same once staging-next is merged into it. It's
+    a forecast: it changes no count.
+
+    Each such row gets "stagingNextBreaks": {"eval", "evaluatedAt",
+    "builds": [{"attr", "system", "build"}], "cycle"?: the open
+    staging-next PR ({"n", "cut"}), when known}.
+
+    Args:
+        rows: The rows, changed in place.
+        found: load_staging_next's result, or None (then rows keep none).
+        cycle: The open staging-next PR, or None.
+    """
     for row in rows:
         row.pop("stagingNextBreaks", None)
     if not found:
@@ -253,16 +262,24 @@ def apply_staging_next_breaks(rows, found, cycle=None):
 
 
 def apply_staging_next_blocked(rows, found):
-    """What staging-next's failing dependencies stop: each row with a job
-    that builds on master but is stopped there by a dependency, at the same
-    version, gets "stagingNextBlockedBy" ({"eval", "evaluatedAt", "builds":
-    [{"system", "build", "by": [{"name", "row"?}]}]}: each dependency the
-    row named after it when there is one, as rows.name_blockers names
-    master's); and each row that stops others there, "stagingNextBlocks"
-    ({"eval", "evaluatedAt", "packages", "builds"}): fix it on staging-next,
-    and they build again. Of every row (those in sets too, as master's
-    blockers count). found: load_staging_next's (none: rows keep none). A
-    forecast: it changes no count."""
+    """Mark what staging-next's failing dependencies stop.
+
+    - A row with a job that builds on master, but is stopped on
+      staging-next by a dependency at the same version, gets
+      "stagingNextBlockedBy": {"eval", "evaluatedAt", "builds": [{"system",
+      "build", "by": [{"name", "row"?}]}]}. Each dependency is named after
+      its row when there is one, as rows.name_blockers names master's.
+    - A row that stops others there gets "stagingNextBlocks": {"eval",
+      "evaluatedAt", "packages", "builds"}: fixed on staging-next, they
+      build again.
+
+    Every row counts, those in sets too, as master's blockers are counted.
+    It's a forecast: it changes no count.
+
+    Args:
+        rows: The rows, changed in place.
+        found: load_staging_next's result, or None (then rows keep none).
+    """
     for row in rows:
         row.pop("stagingNextBlockedBy", None)
         row.pop("stagingNextBlocks", None)
@@ -270,7 +287,7 @@ def apply_staging_next_blocked(rows, found):
         return
     jobs, info = found
     by_attr = {a: row for row in rows for a in row.get("attrs") or []}
-    stops = {}  # blocker's name: [its row or None, {rows stopped}, builds]
+    stops = {}  # {blocker's name: [its row or None, {rows stopped}, builds]}
     for row in rows:
         blocked = []
         for b in row.get("builds") or []:
@@ -304,15 +321,22 @@ def apply_staging_next_blocked(rows, found):
 
 
 def version(name):
-    """The version at the end of what a job builds (NAME_VERSION), or None."""
+    """Return the version at the end of what a job builds (NAME_VERSION), or None."""
     m = NAME_VERSION.search(name or "")
     return m.group(1) if m else None
 
 
 def apply(rows, branch, jobs):
-    """Give each row with a job on branch (jobs: load's) what the branch
-    has: {"name": branch, "version", "status", "build"}, of its first such
-    attribute."""
+    """Give each row with a job on branch what the branch has.
+
+    That's "branch": {"name": branch, "version", "status", "build"}, of its
+    first attribute with a job there.
+
+    Args:
+        rows: The rows, changed in place.
+        branch: The branch's name.
+        jobs: load's result, or None (then nothing changes).
+    """
     if not jobs:
         return
     for row in rows:

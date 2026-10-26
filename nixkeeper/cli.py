@@ -1,17 +1,22 @@
-"""The `nixkeeper` command: one entry point for the sync and the frequent
-checks, with the settings as flags.
+"""Run the `nixkeeper` command: the sync, the hourly checks and the rest.
+
+It's one entry point, with the settings as flags (see each command's
+--help):
 
     nixkeeper sync | frequent-check | pr-check | paths [--lists PATH]
               [--data-dir DIR] [--notify METHOD]
     nixkeeper init [--maintainer HANDLE ...] [--lists PATH]
     nixkeeper page DIR | serve [--port PORT] [--bind ADDRESS]  [--data-dir DIR]
+    nixkeeper community-check [NAME ...] [--file PATH] [--changed-from DIR]
+              [--report-issue]
     nixkeeper --version
 
 Each flag wins over its environment variable (NIXKEEPER_LISTS,
 NIXKEEPER_DATA_DIR, NIXKEEPER_NOTIFY), which wins over the default: the
-user's own folders (config.py). The old
-commands (nixkeeper-sync, nixkeeper-frequent-check, nixkeeper-pr-check) still
-work until 1.0, as aliases."""
+user's own folders (config.py). The old commands (nixkeeper-sync,
+nixkeeper-frequent-check, nixkeeper-pr-check) still work until 1.0, as
+aliases.
+"""
 
 import argparse
 import importlib
@@ -19,9 +24,21 @@ import os
 import sys
 from datetime import UTC, datetime
 
-from . import community, config, history, init, lock, notify, page, version
+from . import (
+    community,
+    community_check,
+    config,
+    history,
+    init,
+    lock,
+    log,
+    notify,
+    page,
+    version,
+)
+from .errors import Problem
 
-# name: (what it does, the module whose main() runs it)
+# {name: (what it does, the module whose main() runs it)}
 COMMANDS = {
     "sync": (
         "one full sync: every source, for every tracked package",
@@ -38,7 +55,7 @@ COMMANDS = {
     ),
 }
 
-# flag: (the config setting it sets, its environment variable)
+# {flag: (the config setting it sets, its environment variable)}
 SETTINGS = {
     "lists": ("LISTS", "NIXKEEPER_LISTS"),
     "data_dir": ("OUT_DIR", "NIXKEEPER_DATA_DIR"),
@@ -47,6 +64,7 @@ SETTINGS = {
 
 
 def parser():
+    """Build the command's argument parser."""
     # The settings, accepted before or after the command. SUPPRESS: a flag
     # left out doesn't overwrite one given in the other position.
     common = argparse.ArgumentParser(add_help=False)
@@ -177,8 +195,13 @@ def parser():
 
 
 def settings(args):
-    """{flag: (value, where it came from)}, flag first, then the environment,
-    then the default."""
+    """Work out each setting, and where it came from.
+
+    The flag wins, then the environment, then the default.
+
+    Returns:
+        {flag: (value, where it came from)}.
+    """
     found = {}
     for flag, (name, env) in SETTINGS.items():
         if getattr(args, flag, None):
@@ -191,6 +214,11 @@ def settings(args):
 
 
 def paths(found):
+    """Print where the lists, the data and the page are, and the notification method.
+
+    Each line also says where it comes from: a flag, a NIXKEEPER_* variable,
+    or the default.
+    """
     for flag, label in (("lists", "lists"), ("data_dir", "data"), ("notify", "notify")):
         value, source = found[flag]
         if flag == "notify":
@@ -201,14 +229,28 @@ def paths(found):
         print(f"{label + ':':7} {where}  ({source}{missing})")
     try:
         print(f"{'page:':7} {page.page_dir()}  (shipped with nixkeeper)")
-    except SystemExit:
+    except Problem:
         print(f"{'page:':7} not included in this copy of nixkeeper")
 
 
 def main(argv=None):
+    """Run the command argv gives (sys.argv's by default).
+
+    A Problem raised anywhere below is the one place nixkeeper exits for
+    its user to fix something: its message is printed, and the exit status
+    is 1.
+    """
+    try:
+        _run_command(argv)
+    except Problem as e:
+        sys.exit(str(e))
+
+
+def _run_command(argv=None):
+    """Run the command argv gives, raising a Problem for its user to fix."""
     args = parser().parse_args(argv)
     if not args.command:
-        parser().print_help(sys.stderr)
+        log.info(parser().format_help().rstrip("\n"))
         sys.exit(2)
     found = settings(args)
     for flag, (name, _) in SETTINGS.items():
@@ -232,19 +274,25 @@ def main(argv=None):
         checks = ignored = None
         unknown = []
         if args.names:
-            checks, ignored, unknown = community.sort_names(args.names, args.file)
+            checks, ignored, unknown = community_check.sort_names(args.names, args.file)
         if args.changed_from:
-            checks, ignored = community.changed(args.changed_from)
+            checks, ignored = community_check.changed(args.changed_from)
             if not checks and not ignored:
-                print("No community rules added or changed.", file=sys.stderr)
+                log.info("No community rules added or changed.")
                 return
-        results = community.run(checks, args.file)
-        stale = community.stale_ignores(ignored) if ignored != [] else {}
-        stale_up = community.stale_up_to_date(ignored) if ignored != [] else {}
-        failed = community.report(results, stale, stale_up)
+        results = community_check.run(checks, args.file)
+        stale_ignore_rules = (
+            community_check.stale_ignores(ignored) if ignored != [] else {}
+        )
+        stale_up_to_date_rules = (
+            community_check.stale_up_to_date(ignored) if ignored != [] else {}
+        )
+        failed = community_check.report(
+            results, stale_ignore_rules, stale_up_to_date_rules
+        )
         for kind, have, gone in (
-            ("ignore rules", community.ignores(), stale),
-            ("up-to-date rules", community.up_to_date(), stale_up),
+            ("ignore rules", community.ignores(), stale_ignore_rules),
+            ("up-to-date rules", community.up_to_date(), stale_up_to_date_rules),
         ):
             still = [n for n in ignored or [] if n in have and n not in gone]
             if still:
@@ -253,14 +301,16 @@ def main(argv=None):
             print(f"  {name}: no community rule of that name")
         failed += len(unknown)
         if args.report_issue:
-            community.publish(results, stale, stale_up)
+            community_check.publish(results, stale_ignore_rules, stale_up_to_date_rules)
             return
         # A pull request's ignore or up-to-date rule has to do something when
         # it's added.
         if args.changed_from:
-            failed += sum(map(len, stale.values())) + len(stale_up)
+            failed += sum(map(len, stale_ignore_rules.values())) + len(
+                stale_up_to_date_rules
+            )
         if failed:
-            sys.exit(f"{failed} community rule(s) don't work.")
+            raise Problem(f"{failed} community rule(s) don't work.")
         return
     if args.command == "page":
         with lock.held():  # not mid-sync: the data is swapped in whole
@@ -276,17 +326,16 @@ def main(argv=None):
         if getattr(args, "if_older", None) is not None:
             age = last_sync_age()
             if age is not None and age < args.if_older:
-                print(
+                log.info(
                     f"The last sync was {age:.1f} hours ago (under {args.if_older:g}): "
-                    "nothing to do.",
-                    file=sys.stderr,
+                    "nothing to do."
                 )
                 return
         importlib.import_module(COMMANDS[args.command][1]).main()
 
 
 def last_sync_age():
-    """Hours since the last sync finished, or None if there's been none."""
+    """Return the hours since the last sync finished, or None if there was none."""
     checked = history.load_previous_run().get("checkedAt")
     if not checked:
         return None
@@ -294,11 +343,13 @@ def last_sync_age():
 
 
 def _alias(command):
+    """Make an old command's entry point: it says the new name, then runs it."""
+
     def run():
-        print(
+        """Run the command under its new name."""
+        log.info(
             f"nixkeeper-{command} is now `nixkeeper {command}`; the old name "
-            "works until 1.0.",
-            file=sys.stderr,
+            "works until 1.0."
         )
         main([command, *sys.argv[1:]])
 

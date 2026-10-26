@@ -1,40 +1,16 @@
+import { homeHref, pageLinks, VIEWS, viewPath, withRunStamps } from './address.js';
 import { dataUrl, fullRowOf, githubRepo, locateData, readJson } from './data.js';
-import { currentFiltered, FILTERS, KNOWN, PLATFORMS } from './filters.js';
 import {
-  BY_SHOWN,
-  bulkBadge,
-  DOT_TITLE,
-  facetOption,
-  listHeaderHtml,
-  listView,
-  renderLists,
-  renderStats,
-  rowHtml,
-  searchValues,
-  wireList,
-} from './list.js';
-import {
-  attentionPrint,
-  computeStatus,
   decodeFacets,
   foldFamilies,
-  homeHref,
-  html,
   inPickedSet,
-  maintainerMatches,
   matchFacets,
-  NAME_DOTS,
   NAME_STATUSES,
-  nameMatches,
-  pageLinks,
-  prPrint,
-  raw,
   TOP_LEVEL,
-  themeFor,
-  VIEWS,
-  viewPath,
-  withRunStamps,
-} from './logic.js';
+} from './facets.js';
+import { currentFiltered, FILTERS, KNOWN, PLATFORMS } from './filters.js';
+import { renderLists, renderStats, searchValues, wireList } from './list.js';
+import { BY_SHOWN, facetOption, listHeaderHtml } from './list-controls.js';
 import {
   hiddenPrPrints,
   maintainerItem,
@@ -42,9 +18,13 @@ import {
   saveHiddenPrs,
   wireMaintainerView,
 } from './maintainer-view.js';
+import { appendHtml, html, NO_MARKUP, raw, setHtml } from './markup.js';
 import { highlightShown, overviewHtml, wireOverview } from './overview.js';
 import { fillBuilds, fillDetail, fillUpdate } from './package-view.js';
+import { themeFor } from './palette.js';
+import { maintainerMatches, NAME_DOTS, nameMatches } from './people.js';
 import { HIDDEN_KEY, hiddenPrints, isHidden, pruneHidden, remember, stored } from './prefs.js';
+import { bulkBadge, DOT_TITLE, rowHtml } from './row.js';
 import {
   matchNote,
   needsList,
@@ -58,12 +38,14 @@ import {
 import {
   failedBuilds,
   known,
+  listView,
   PAGE_SIZES,
   readState,
   scopeHref,
   state,
   writeState,
 } from './state.js';
+import { attentionPrint, computeStatus, prPrint } from './status.js';
 import { store } from './store.js';
 import { timer } from './timing.js';
 import { fmt } from './ui.js';
@@ -268,10 +250,15 @@ function showListProblems(problems) {
   const el = document.getElementById('listProblems');
   if (!el) return;
   el.hidden = problems.length === 0;
-  el.innerHTML = problems.length
-    ? html`⚠ ${problems.length === 1 ? 'A problem' : `${problems.length} problems`} in the package lists, found by the last sync:
-      <ul>${problems.map((p) => html`<li>${p}</li>`)}</ul>`
-    : '';
+  if (!problems.length) {
+    el.textContent = '';
+    return;
+  }
+  setHtml(
+    el,
+    html`⚠ ${problems.length === 1 ? 'A problem' : `${problems.length} problems`} in the package lists, found by the last sync:
+      <ul>${problems.map((p) => html`<li>${p}</li>`)}</ul>`,
+  );
 }
 
 // The summary's entries, a short one per package (summary.json).
@@ -450,8 +437,11 @@ async function update({ keepPage = false } = {}) {
     try {
       await ensureView();
     } catch {
-      document.getElementById('content').innerHTML = html`<div class="error">
-        Couldn't load these packages' data. Reload the page to try again.</div>`;
+      setHtml(
+        document.getElementById('content'),
+        html`<div class="error">
+        Couldn't load these packages' data. Reload the page to try again.</div>`,
+      );
       return;
     }
   }
@@ -473,12 +463,15 @@ async function loadIndex() {
   const content = document.getElementById('content');
   if (!(await locateData())) {
     doneLoading();
-    content.innerHTML = `<div class="error">
+    setHtml(
+      content,
+      html`<div class="error">
       Couldn't find the data to show.<br>
       Serve it as <code>data/</code> next to this page, set it with
       <code>&lt;meta name="nixkeeper-data"&gt;</code> in <code>index.html</code>,
       or open this from its GitHub Pages site.
-    </div>`;
+    </div>`,
+    );
     return;
   }
   try {
@@ -486,10 +479,13 @@ async function loadIndex() {
     if (!(data.format >= 2 && data.shardCount)) {
       // Format 1, which only nixkeeper 0.11.0 and before write alone.
       doneLoading();
-      content.innerHTML = html`<div class="error">
+      setHtml(
+        content,
+        html`<div class="error">
         This data is from nixkeeper 0.11.0 or older, which this page no longer reads.<br>
         The next sync rewrites it.
-      </div>`;
+      </div>`,
+      );
       return;
     }
     store.checkedAt = data.checkedAt || null;
@@ -521,10 +517,13 @@ async function loadIndex() {
     await update({ keepPage: true });
   } catch {
     doneLoading();
-    content.innerHTML = html`<div class="error">
+    setHtml(
+      content,
+      html`<div class="error">
       Couldn't load <code>${dataUrl('index.json')}</code>.<br>
       Check that the sync has run at least once (and, on GitHub, that the repo is public).
-    </div>`;
+    </div>`,
+    );
   }
 }
 
@@ -616,7 +615,7 @@ async function render(list, { keepPage = false, run = updateRun, took = timer('r
     // Maintainers, not packages: paged by their own count (maintainersHtml).
     if (!keepPage) state.pageNum = 1;
     shown = [];
-    content.innerHTML = maintainersHtml(pagerHtml);
+    setHtml(content, maintainersHtml(pagerHtml));
     writeViewToUrl();
     return;
   }
@@ -633,7 +632,7 @@ async function render(list, { keepPage = false, run = updateRun, took = timer('r
   if (store.community && store.shownView === 'overview') {
     // The overview lists nothing: its header has the ways in (renderScope),
     // and a search finds packages in all of nixpkgs.
-    content.innerHTML = moreMatchesHtml();
+    setHtml(content, moreMatchesHtml());
     return;
   }
   if (!list.length) {
@@ -642,18 +641,32 @@ async function render(list, { keepPage = false, run = updateRun, took = timer('r
     const handle = searchText().trim();
     if (store.community && /^@\S/.test(handle) && !narrowed && state.activeFilter === 'all') {
       // No such maintainer (yet: still typing): the ones whose handle matches.
-      content.innerHTML = html`<div class="empty">No maintainer is ${handle}.</div>${moreMatchesHtml()}`;
+      setHtml(
+        content,
+        html`<div class="empty">No maintainer is ${handle}.</div>${moreMatchesHtml()}`,
+      );
       return;
     }
-    content.innerHTML = html`<div class="empty">No packages match${narrowed ? ' these filters' : state.activeFilter !== 'all' && !searchText().trim() ? ` the “${FILTERS[state.activeFilter].label}” filter` : ''}${store.community ? ' here' : ''}.</div>${moreMatchesHtml()}`;
+    const which = narrowed
+      ? ' these filters'
+      : state.activeFilter !== 'all' && !searchText().trim()
+        ? ` the “${FILTERS[state.activeFilter].label}” filter`
+        : '';
+    setHtml(
+      content,
+      html`<div class="empty">No packages match${which}${store.community ? ' here' : ''}.</div>${moreMatchesHtml()}`,
+    );
     return;
   }
-  content.innerHTML = html`<div class="wrap"><table>
+  setHtml(
+    content,
+    html`<div class="wrap"><table>
     <thead><tr>
       <th style="padding-left:10px">Package</th><th>nixpkgs unstable</th><th>Open on GitHub</th><th>Build failures</th><th>Update failures</th><th><span class="sr-only">Details</span></th>
     </tr></thead>
     <tbody id="rows">${shown.slice(0, FIRST_ROWS).map(rowHtml)}</tbody>
-  </table></div>${pagerHtml(list.length, pages)}${moreMatchesHtml()}`;
+  </table></div>${pagerHtml(list.length, pages)}${moreMatchesHtml()}`,
+  );
   took.lap('rows');
   watchErrors();
   // One package shown by its link (?pkg=): its details open at once, the
@@ -668,12 +681,13 @@ async function render(list, { keepPage = false, run = updateRun, took = timer('r
   await yieldToBrowser();
   if (run !== updateRun) return;
   took.lap('browser');
-  document
-    .getElementById('rows')
-    ?.insertAdjacentHTML(
-      'beforeend',
-      String(html`${shown.slice(FIRST_ROWS).map((pkg, i) => rowHtml(pkg, FIRST_ROWS + i))}`),
+  const rows = document.getElementById('rows');
+  if (rows) {
+    appendHtml(
+      rows,
+      html`${shown.slice(FIRST_ROWS).map((pkg, i) => rowHtml(pkg, FIRST_ROWS + i))}`,
     );
+  }
   took.lap('more rows');
   watchErrors();
 }
@@ -708,14 +722,17 @@ async function openErrors(tr) {
   const detail = document.createElement('tr');
   detail.className = 'detail open errors';
   detail.dataset.mode = 'build';
-  detail.innerHTML = `<td colspan="6"><div class="detail-inner">
+  setHtml(
+    detail,
+    html`<td colspan="6"><div class="detail-inner">
       <div class="nix-line">Loading its builds…</div>
-    </div></td>`;
+    </div></td>`,
+  );
   tr.after(detail);
   const row = await fullRow(pkg);
   const inner = detail.querySelector('.detail-inner');
   if (row) fillBuilds(row, inner, panelPage);
-  else inner.innerHTML = html`<div class="nix-line">Couldn't load its builds.</div>`;
+  else setHtml(inner, html`<div class="nix-line">Couldn't load its builds.</div>`);
 }
 
 // With every package, the header. The overview (no list chosen): all of
@@ -733,16 +750,19 @@ function renderScope() {
   if (!store.community) return;
   if (store.shownView === 'maintainers') {
     el.dataset.drawn = '';
-    el.innerHTML = html`<div class="scope-view">
+    setHtml(
+      el,
+      html`<div class="scope-view">
       <span class="scope-label">Showing</span>
       <span class="view-chip">Maintainers · ${fmt(store.maintainersList?.length)}<a class="view-x" href="${scopeHref({})}" data-scope-home aria-label="Back to the overview" title="Back to the overview">✕</a></span>
       <span class="scope-hint">by handle; the search narrows them, and one opens their packages</span>
-    </div>`;
+    </div>`,
+    );
     return;
   }
   if (store.shownView !== 'overview') {
     el.dataset.drawn = '';
-    el.innerHTML = listHeaderHtml(loadMerge);
+    setHtml(el, listHeaderHtml(loadMerge));
     return;
   }
   // Drawn again only when it changes (its history arrives, a team is
@@ -750,7 +770,7 @@ function renderScope() {
   const drawn = `${store.trendPoints?.length ?? -1}:${store.trendEvents.length}:${state.teamFilter || ''}:${Object.values(highlightShown)}:${store.allCauses ? 'all' : ''}`;
   if (el.dataset.drawn !== drawn) {
     el.dataset.drawn = drawn;
-    el.innerHTML = overviewHtml();
+    setHtml(el, overviewHtml());
   }
   // While searching, the matches (drawn under the overview) get the room:
   // the newest and longest-standing and the sets updated in bulk step aside, and
@@ -809,7 +829,7 @@ function maintainerMatchesHtml(query) {
     store.shownView === 'overview'
       ? found
       : found.filter(([handle]) => handle.toLowerCase() !== typed);
-  if (!others.length) return '';
+  if (!others.length) return NO_MARKUP;
   return html`<div class="more-matches">
     <div class="other-label">${typed && total > others.length ? 'Other maintainers' : 'Maintainers'} matching @${typed}${total > found.length ? html`, the first ${found.length}` : ''}</div>
     <ul class="maint-list">${others.map(maintainerItem)}</ul>
@@ -828,7 +848,7 @@ function moreMatchesHtml() {
   )
     return maintainerMatchesHtml(query);
   if (!store.community || state.pkgParam || query.trim().length < 2 || query.trim().startsWith('@'))
-    return '';
+    return NO_MARKUP;
   if (!store.names) {
     loadNames();
     return html`<div class="more-matches"><div class="other-label">Searching all of nixpkgs…</div></div>`;
@@ -852,7 +872,7 @@ function moreMatchesHtml() {
     new Set(store.packages.map((p) => p.name)),
     Infinity,
   );
-  if (!total) return '';
+  if (!total) return NO_MARKUP;
   const narrowed =
     state.inFilter ||
     state.statusFilter ||
@@ -972,9 +992,12 @@ async function toggle(tr, mode) {
   if (!detail?.classList.contains('detail')) {
     detail = document.createElement('tr');
     detail.className = 'detail';
-    detail.innerHTML = `<td colspan="6"><div class="detail-inner">
+    setHtml(
+      detail,
+      html`<td colspan="6"><div class="detail-inner">
       <div class="nix-line">Loading detail…</div>
-    </div></td>`;
+    </div></td>`,
+    );
     tr.after(detail);
   }
   const inner = detail.querySelector('.detail-inner');
@@ -992,7 +1015,10 @@ async function toggle(tr, mode) {
   const entries = row && mode === 'info' ? row.repology || [] : null;
   if (detail.dataset.mode !== mode) return; // switched or closed meanwhile
   if (!row) {
-    inner.innerHTML = html`<div class="nix-line">Couldn't load this package's details. Open it again to retry.</div>`;
+    setHtml(
+      inner,
+      html`<div class="nix-line">Couldn't load this package's details. Open it again to retry.</div>`,
+    );
   } else if (mode === 'build') fillBuilds(row, inner, panelPage);
   else if (mode === 'update') fillUpdate(row, inner);
   else fillDetail(row, inner, entries, panelPage);

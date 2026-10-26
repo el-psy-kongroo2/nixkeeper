@@ -5,6 +5,8 @@ Run with `nix flake check`, or from the repository root inside `nix develop`:
     python3 -m unittest discover -s tests -t .
 """
 
+import os
+
 from nixkeeper import config
 
 
@@ -29,6 +31,9 @@ def offline():
     config.STABLE_INDEX_URL = ""
     # Nor a nixkeeper-prs digest: the sync lists PRs and issues itself.
     config.PRS_DIGEST_URL = ""
+    # Not on GitHub Actions, wherever the tests run: the log's plain form
+    # (log.py). A test of GitHub's form patches it on.
+    os.environ.pop("GITHUB_ACTIONS", None)
 
 
 offline()

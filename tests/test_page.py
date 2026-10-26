@@ -4,6 +4,7 @@
 import io
 import json
 import os
+import shutil
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,7 @@ import urllib.request
 from unittest import mock
 
 from nixkeeper import cli, config, page
+from nixkeeper.errors import Problem
 
 
 class Page(unittest.TestCase):
@@ -35,7 +37,7 @@ class Page(unittest.TestCase):
 
     def test_the_page_is_there(self):
         self.assertTrue(os.path.exists(os.path.join(page.page_dir(), "index.html")))
-        self.assertTrue(os.path.exists(os.path.join(page.page_dir(), "logic.js")))
+        self.assertTrue(os.path.exists(os.path.join(page.page_dir(), "app.js")))
 
     def test_writes_the_page_and_the_data(self):
         site = os.path.join(self.dir.name, "site")
@@ -54,6 +56,35 @@ class Page(unittest.TestCase):
         self.assertEqual(os.listdir(os.path.join(site, "data")), ["index.json"])
         self.assertFalse(os.path.exists(os.path.join(site, "data.tmp")))
 
+    def test_the_data_is_never_deleted_from_under_a_host(self):
+        # Swapped in as the sync's own is: after each folder deleted, the
+        # data is still there.
+        site = os.path.join(self.dir.name, "site")
+        page.write(site)
+        rmtree, missing = shutil.rmtree, []
+
+        def watched(path, *args, **kwargs):
+            rmtree(path, *args, **kwargs)
+            if not os.path.isdir(os.path.join(site, "data")):
+                missing.append(path)
+
+        with mock.patch("shutil.rmtree", watched):
+            page.write(site)
+        self.assertEqual(missing, [])
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(site, "data"))), ["index.json", "unciv.json"]
+        )
+        self.assertFalse(os.path.exists(os.path.join(site, "data.old")))
+
+    def test_a_write_cut_short_is_tidied(self):
+        # Died between the swap's two renames: no data/, the last in data.old.
+        site = os.path.join(self.dir.name, "site")
+        page.write(site)
+        os.rename(os.path.join(site, "data"), os.path.join(site, "data.old"))
+        page.write(site)
+        self.assertTrue(os.path.exists(os.path.join(site, "data", "index.json")))
+        self.assertFalse(os.path.exists(os.path.join(site, "data.old")))
+
     def test_into_an_empty_folder(self):
         site = os.path.join(self.dir.name, "empty")
         os.mkdir(site)
@@ -64,20 +95,20 @@ class Page(unittest.TestCase):
         site = os.path.join(self.dir.name, "home")
         os.makedirs(os.path.join(site, "data"))
         open(os.path.join(site, "data", "precious.txt"), "w").close()
-        with self.assertRaises(SystemExit) as exit:
+        with self.assertRaises(Problem) as exit:
             page.write(site)
-        self.assertIn("isn't a nixkeeper page", str(exit.exception.code))
+        self.assertIn("isn't a nixkeeper page", str(exit.exception))
         self.assertEqual(os.listdir(os.path.join(site, "data")), ["precious.txt"])
         a_file = os.path.join(self.dir.name, "file")
         open(a_file, "w").close()
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(Problem):
             page.write(a_file)
 
     def test_needs_a_sync_first(self):
         os.remove(os.path.join(self.data, "index.json"))
-        with self.assertRaises(SystemExit) as exit:
+        with self.assertRaises(Problem) as exit:
             page.write(os.path.join(self.dir.name, "site"))
-        self.assertIn("nixkeeper sync", str(exit.exception.code))
+        self.assertIn("nixkeeper sync", str(exit.exception))
 
 
 class Serve(unittest.TestCase):

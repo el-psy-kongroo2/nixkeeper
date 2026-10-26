@@ -88,6 +88,95 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   the same 5,401 files with every package, and the same 4 with one
   maintainer's lists.
 
+- Where the data folder is comes from one helper, `config.data_dir`: the
+  folder a function was given, else the configured one as it is when
+  called (so `--data-dir` applies). It replaces `out_dir or
+  config.OUT_DIR`, repeated in 15 places across six modules, and four
+  direct reads of `config.OUT_DIR`; only the command's own settings table
+  names it now. Nothing it does changes.
+
+- The digest readers share one way of fetching and checking a digest
+  (`sources/digests.py`): reading its `meta.json`, its other files or a
+  file that describes itself, checking its format and age, and giving up
+  on it when it can't be read or is too old, where eight readers each had
+  a copy. Each reader keeps what makes it current and how its data is
+  parsed. Nothing it does changes: two syncs with every package, before
+  and after, wrote the same 5,401 files. The log is the same too, but for
+  a digest too old to use, now said the same way for each ("not used,
+  read ...").
+
+- Only the command exits. Where nixkeeper stops for something its user has
+  to fix (no package lists, no data yet, too many packages, a handle that
+  isn't one), the code raises one exception, `errors.Problem`, and
+  `cli.main` prints its message and exits; before, six modules exited
+  themselves, and three places caught that exit to carry on. The messages
+  and the exit status are the same as before. Besides that handler, only
+  the usage error (no command given) exits.
+
+- `nixkeeper community-check` has a module of its own,
+  `community_check.py`; `community.py` keeps what the sync uses (reading
+  and merging the community's rules, and their limits). The ten imports
+  that sat inside the command's functions, there to avoid an import cycle,
+  are at the top of the new module. The command's output is the same as
+  before.
+
+- The views, counts and lists the overview reads (with every package) are
+  built by one small collector each, `_Views`, `_Counts`, `_Sets` and six
+  more in `datastore/`, where one 326-line loop built them all; each is
+  tested on its own. Nothing they write changes: two syncs with every
+  package, before and after, wrote the same 5,401 files.
+
+- A row's verdict is corrected where Repology's doesn't fit nixpkgs (a
+  release word, a distribution's snapshot, nixpkgs' own older channels, a
+  kept series, ...) by eight small named functions in `rows.py`, applied
+  in the order `CORRECTIONS` lists them, where one 250-line `make_row` did
+  it all; each is tested on its own. The rows don't change: the old and
+  new code gave the same rows for 100,000 generated projects, and two
+  syncs with every package, before and after, wrote the same 5,401 files.
+
+- The update bot's attempts are found and judged in two parts of
+  `sources/nixpkgs_update.py`, where one 166-line `add_attempts` did both:
+  `_Finder` finds each row's attempts (from the digest, the logs, or the
+  last sync when they aren't read), and `judge` decides what the latest
+  one means (superseded, ignored by a rule). Each is tested on its own,
+  without the logs. Nothing changes: the old and new code gave the same
+  rows and log lines for 20,000 generated runs, and two syncs with every
+  package, before and after, wrote the same 5,401 files.
+
+- A test keeps the steps that decide whether a package is outdated in the
+  order the sync runs them (`tests/test_phase_order.py`): it reads them
+  from `sync.py` itself, so moving one (from the channel's versions and
+  the up-to-date rules to master, the follows and the update PRs) fails
+  it, and for each pair whose order matters, it shows on a few packages
+  the other verdict the other order would give.
+
+- A row's fields have a type, `Row` in `shape.py` (what the data check
+  reads them from), and `nix flake check` runs mypy over the code that
+  works out whether a package is outdated, so a misspelt field or a wrong
+  type there fails the check. Nothing the sync writes changes: two syncs
+  with every package, before and after, wrote the same 5,401 files.
+
+- Whether a package is outdated, and against which version, is decided in
+  one place (`verdict.py`), from what each source found: Repology's
+  verdict, then the channel's version, a version feed, an up-to-date rule,
+  an update check, master's version and the update PRs, in that order.
+  The sync and the hourly checks decide it the same way, whatever order
+  they find things in. Each row whose verdict isn't Repology's keeps
+  Repology's beside it (`repologyVerdict`, in the rows only: 11,911 rows,
+  about 1.5 MB more data). Nothing else the sync writes changes: two syncs
+  with every package, before and after, wrote the same 5,401 files once
+  that field is set aside. Data written before has no such field, so the
+  hourly checks publish nothing on it until a full sync with this version
+  has run (the manifest's `verdicts` says one has).
+
+- Outside GitHub Actions (a terminal, the NixOS module's journal), warnings
+  now read `warning: ...` instead of `::warning::...`, and notices
+  `notice: ...`; the journal files them as warnings and notices
+  (`journalctl -p warning -u nixkeeper-sync`). On GitHub Actions they're
+  annotations as before, now in full when the message is several lines
+  long (a Nix evaluation error), and problems the data check finds before
+  a write are one too.
+
 - **The overview has one search box**, the one at the top (with its menu),
   rather than a second one under the tiles: the team picker and "browse
   every maintainer" stay there. Maintainers are found by handle on
@@ -118,6 +207,32 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
   preloaded with `app.js`. Nothing on the page changes.
 
 ### Fixed
+
+- The hourly checks decide a package's verdict as the sync does. The PR
+  check gave a package that follows another (follows.py) the version its
+  PRs bring, which the next sync took away again; the frequent check left
+  out a package's up-to-date rule after asking Repology again.
+
+- `nixkeeper page` replaces a folder's data as the sync replaces its own:
+  the old `data/` is moved aside before the new one is moved in, so a host
+  serving the folder finds no data only between two renames, not while the
+  old copy is deleted. A write cut short between them is put right by the
+  next one.
+
+- A failed deploy to Cloudflare is tried again, 3 attempts in all, 30 s
+  apart, before the run fails: one failed request to Cloudflare's API
+  ("An unknown error has occurred", code 10013) failed a sync's run, and
+  nixkeeper.com kept the last sync's data until the next one. A new flake
+  check (`scripts`, `tests/sh/cloudflare.sh`) runs the script against a
+  fake wrangler.
+
+- A package covering two names that one removal PR touches (segger-jlink
+  with segger-jlink-headless) no longer gains or loses its "being removed"
+  PR at random from one sync to the next: the row kept whichever copy of
+  the PR it met last, in an order that changes between runs, and only the
+  copy under the package the PR's title names says it's a removal. The
+  PR's copies are merged now, so its facts are kept from whichever copy
+  has them.
 
 - While a sync writes the data folder, the data is missing only for the
   moment between two renames, rather than while the old folder is

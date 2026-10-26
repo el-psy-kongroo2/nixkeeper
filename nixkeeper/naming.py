@@ -1,6 +1,6 @@
 """How the data's files are named: shared by the writer and its checks.
 
-Both datastore.py, which writes the data, and shape.py, which checks it,
+Both datastore/, which writes the data, and shape.py, which checks it,
 need the same rules. Keeping them here, in one place, means a change to
 a rule reaches both.
 """
@@ -12,7 +12,7 @@ import zlib
 def slug(name):
     """Turn a team's or list's name into its view's file name.
 
-    The page does the same in viewSlug (page/logic.js).
+    The page does the same in viewSlug (page/address.js).
 
     Args:
         name: The name, such as "Security review".

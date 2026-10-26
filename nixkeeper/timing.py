@@ -1,35 +1,48 @@
-"""How long each phase of a run took, in its log: where a sync's minutes go,
-seen rather than guessed (and the evidence before making one faster)."""
+"""Time each phase of a run, and report the times in its log.
 
-import sys
+The report shows where a sync's minutes go, so they're seen rather than
+guessed, and it's the evidence to start from before making a phase faster.
+"""
+
 import time
+
+from . import log
 
 
 class Phases:
-    """A run's phases, timed one after the other: lap(name) ends the phase
-    called name (it began at the last lap, or at the start), report() puts
-    them all in the log, the longest first, with each one's share."""
+    """A run's phases, timed one after the other.
+
+    Call lap(name) at the end of each phase: the phase began at the previous
+    lap, or when Phases was made. Call report() at the end of the run.
+
+    Args:
+        clock: The clock to read, in seconds (time.monotonic; tests pass
+            their own).
+    """
 
     def __init__(self, clock=time.monotonic):
+        """Start timing: the first phase begins now."""
         self._clock = clock
         self._last = self._start = clock()
         self.laps = []  # [(name, seconds)], in the order they ran
 
     def lap(self, name):
+        """End the phase called name, which began at the previous lap."""
         now = self._clock()
         self.laps.append((name, now - self._last))
         self._last = now
 
-    def report(self, out=sys.stderr):
+    def report(self):
+        """Say every phase's time in the log, the longest first, with its share."""
         total = self._clock() - self._start
-        print(f"Phases: {_took(total)} in all", file=out)
+        log.info(f"Phases: {_took(total)} in all")
         for name, seconds in sorted(self.laps, key=lambda lap: -lap[1]):
             share = 100 * seconds / total if total else 0
-            print(f"  {_took(seconds):>8} {share:3.0f}%  {name}", file=out)
+            log.info(f"  {_took(seconds):>8} {share:3.0f}%  {name}")
 
 
 def _took(seconds):
-    """1.2 s, 47 s, 3 min 05 s."""
+    """Format a duration in seconds briefly: "1.2 s", "47 s", "3 min 05 s"."""
     if seconds < 10:
         return f"{seconds:.1f} s"
     if seconds < 60:

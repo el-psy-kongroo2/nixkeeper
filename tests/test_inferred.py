@@ -3,7 +3,7 @@ import re
 import unittest
 from unittest import mock
 
-from nixkeeper import inferred
+from nixkeeper import config, inferred
 from nixkeeper.sources import github
 from nixkeeper.sources import nixpkgs as nixpkgs_source
 
@@ -233,9 +233,13 @@ class WorkOut(unittest.TestCase):
         rows[1]["upstream"] = {"version": "2.1", "inferred": True}
         rows[1]["refVersion"] = "2.1"
         rows[0]["upstream"] = {"version": "1.0"}  # a's own rule
-        with mock.patch.object(
-            github, "latest_tags", return_value={"o/a": ["v1.0", "v1.1rc1"]}
-        ) as latest_tags:
+        with (
+            mock.patch.object(
+                github, "latest_tags", return_value={"o/a": ["v1.0", "v1.1rc1"]}
+            ) as latest_tags,
+            # On GitHub Actions, as the sync runs: folded in a group.
+            mock.patch.object(config, "on_github_actions", return_value=True),
+        ):
             inferred.report(worked, rows, rules, {"d": "couldn't read the tags"})
         # Only the worked-out checks of packages with a rule are asked here.
         latest_tags.assert_called_once_with("t", ["o/a"])
@@ -257,7 +261,11 @@ class WorkOut(unittest.TestCase):
         worked, _ = self.work_out(rules=rules)
         rows = [dict(r) for r in self.ROWS]
         rows[0]["upstream"] = {"version": "0.9"}  # a's rule: another series
-        with mock.patch.object(github, "latest_tags", return_value={"o/a": ["v1.1"]}):
+        with (
+            mock.patch.object(github, "latest_tags", return_value={"o/a": ["v1.1"]}),
+            # GitHub's form, the lines not indented in the group.
+            mock.patch.object(config, "on_github_actions", return_value=True),
+        ):
             inferred.report(worked, rows, rules, {})
         out = self.stderr.getvalue()
         self.assertIn("0 don't, 1 differ from their rule (the rule is used)", out)

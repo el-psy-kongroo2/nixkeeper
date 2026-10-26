@@ -1,12 +1,15 @@
-"""GET with retries, shared by the sources that don't need more (Repology has
-its own: it also falls back between domains)."""
+"""Fetch URLs with retries, for the sources that need nothing more.
+
+Repology has its own fetching (repology.py), as it also falls back between
+domains. Safe mode, for the community's update checks, only fetches https
+pages at public addresses, of at most MAX_BYTES.
+"""
 
 import email.utils
 import gzip
 import http.client
 import ipaddress
 import socket
-import sys
 import threading
 import time
 import urllib.error
@@ -14,9 +17,9 @@ import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 
-from .. import config
+from .. import config, log
 
-# Safe mode (community update checks): the most a page may be.
+# The most a page may be in safe mode (the community's update checks).
 MAX_BYTES = 2_000_000
 
 
@@ -25,9 +28,16 @@ class UnsafeURL(urllib.error.URLError):
 
 
 def check_public(url):
-    """Raise UnsafeURL unless url is https and its host resolves only to
-    public internet addresses (not this machine, a private network, or a
-    cloud metadata service)."""
+    """Raise UnsafeURL unless url is safe to fetch.
+
+    It is when it's https and its host resolves only to public internet
+    addresses: not this machine, a private network, or a cloud metadata
+    service.
+
+    Raises:
+        UnsafeURL: It isn't.
+        urllib.error.URLError: The host can't be resolved.
+    """
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
         raise UnsafeURL(f"not an https URL: {url}")
@@ -42,20 +52,24 @@ def check_public(url):
 
 
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
-    """Follows a redirect only to a URL check_public accepts."""
+    """A redirect handler that follows only to URLs check_public accepts."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Check newurl before following the redirect."""
         check_public(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+# What safe mode fetches with.
 _safe_opener = urllib.request.build_opener(_CheckedRedirects)
 
 
 def asked_wait(err, now=None):
-    """The seconds a server asked to wait before trying again: the
-    Retry-After of a 429 (too many requests) or 503 (unavailable) answer, in
-    seconds or as a date. None if it didn't say."""
+    """Return the seconds a server asked to wait before trying again, or None.
+
+    That's the Retry-After of a 429 (too many requests) or 503
+    (unavailable) answer, in seconds or as a date. None when it didn't say.
+    """
     if not isinstance(err, urllib.error.HTTPError) or err.code not in (429, 503):
         return None
     value = (err.headers or {}).get("Retry-After", "").strip()
@@ -71,44 +85,66 @@ def asked_wait(err, now=None):
 
 
 def retry_wait(planned, err, host):
-    """How long to wait before retrying after err: the planned delay, or
-    longer if the server asked (asked_wait). If it asked for more than
-    MAX_RETRY_AFTER, raises err instead: that request fails, rather than
-    stalling the whole run."""
+    """Return how long to wait before retrying after err.
+
+    That's the planned delay, or longer when the server asked (asked_wait).
+
+    Raises:
+        urllib.error.HTTPError: err itself, when the server asked for more
+            than MAX_RETRY_AFTER: that request fails, rather than stalling
+            the whole run.
+    """
     asked = asked_wait(err)
     if asked is None:
         return planned
     if asked > config.MAX_RETRY_AFTER:
-        print(
+        log.info(
             f"  {host} asks to wait {asked}s, longer than nixkeeper waits "
-            f"({config.MAX_RETRY_AFTER}s): giving this request up",
-            file=sys.stderr,
+            f"({config.MAX_RETRY_AFTER}s): giving this request up"
         )
         raise err
     return max(planned, asked)
 
 
 def get(url, accept=None, safe=False, compressed=False):
-    """The body of url as text, retrying after RETRY_DELAYS seconds. Returns
-    None on 404; raises once every attempt has failed. safe (community
-    update checks): https to public addresses only, redirects included, and
-    at most MAX_BYTES; UnsafeURL is raised at once, not retried. compressed:
-    accept a gzipped answer, for big pages from sources nixkeeper trusts (not
-    with safe: MAX_BYTES couldn't hold for what it unpacks to)."""
+    """Return url's body as text, or None on a 404.
+
+    The request is retried after RETRY_DELAYS seconds. It raises once every
+    attempt has failed, or at once when the server asks to wait longer than
+    MAX_RETRY_AFTER (retry_wait).
+
+    Args:
+        url: The URL.
+        accept: The Accept header to send, if any.
+        safe: Safe mode, for the community's update checks: https to public
+            addresses only, redirects included, and at most MAX_BYTES.
+            UnsafeURL is raised at once, not retried.
+        compressed: Accept a gzipped answer, for big pages from sources
+            nixkeeper trusts (not with safe: MAX_BYTES couldn't hold for
+            what it unpacks to).
+    """
     return _fetch(url, accept, safe, compressed)[0]
 
 
 def get_bytes(url):
-    """The body of url as it is (a compressed file, say), retrying as get
-    does, with longer to arrive (DOWNLOAD_DEADLINE_SECONDS). Returns None on
-    404."""
+    """Return url's body as bytes, or None on a 404.
+
+    That's for files such as compressed digests. The request is retried as
+    get's is, with longer to arrive (DOWNLOAD_DEADLINE_SECONDS).
+    """
     return _fetch(url, raw=True)[0]
 
 
 def _read(resp, deadline, limit=None):
-    """resp's body, read as it arrives, at most limit + 1 bytes (to tell it's
-    over limit); TimeoutError once time.monotonic() is past deadline, however
-    steadily it trickles in."""
+    """Read resp's body as it arrives.
+
+    Args:
+        resp: The response.
+        deadline: The time.monotonic() past which reading stops with a
+            TimeoutError, however steadily the body trickles in.
+        limit: The most bytes wanted: at most limit + 1 are read, to tell
+            that the body is over it.
+    """
     if not isinstance(resp, http.client.HTTPResponse):
         # Not from a socket (a test's): nothing to wait for.
         return resp.read() if limit is None else resp.read(limit + 1)
@@ -125,21 +161,22 @@ def _read(resp, deadline, limit=None):
     return b"".join(chunks)
 
 
-# A page as last read: its server's tag for that version of it ("etag") and
-# when it last changed ("lastModified"), as the server gave them (either can
-# be missing).
+# What get_page returns when the server says the page hasn't changed since
+# it was last read (HTTP 304).
 NOT_MODIFIED = 304
 
 
 # When each site was last asked, for pace().
-_last_asked = {}
+_last_asked: dict[str, float] = {}
 _pacing = threading.Lock()
 
 
 def pace(url):
-    """Wait, if need be, so url's site (its host) is asked at most once every
-    SITE_PAUSE_SECONDS: update checks can have many pages on one site (PyPI,
-    a vendor's), and they shouldn't arrive back to back."""
+    """Wait so url's site is asked at most once every SITE_PAUSE_SECONDS.
+
+    Update checks can have many pages on one site (PyPI, a vendor's), and
+    they shouldn't arrive back to back. A site is a URL's host.
+    """
     host = urllib.parse.urlsplit(url).netloc.lower()
     with _pacing:
         wait = _last_asked.get(host, float("-inf")) + config.SITE_PAUSE_SECONDS
@@ -150,11 +187,21 @@ def pace(url):
 
 
 def get_page(url, cached=None, safe=False):
-    """Like get, for a page read before: cached ({"etag", "lastModified"},
-    from the last time) lets the server answer that it hasn't changed since,
-    without sending it again. Returns (text, cached): text None on 404, or
-    NOT_MODIFIED when it hasn't changed; cached, what to send next time
-    ({} if the server gives neither)."""
+    """Fetch a page read before, unless it hasn't changed since.
+
+    What the server gave the last time lets it answer that the page hasn't
+    changed, without sending it again. Otherwise this works as get does.
+
+    Args:
+        url: The URL.
+        cached: {"etag", "lastModified"} from the last time, or None.
+        safe: Safe mode, as get's.
+
+    Returns:
+        (text, cached). text is None on a 404, or NOT_MODIFIED when the page
+        hasn't changed; cached is what to send next time ({} when the server
+        gives neither).
+    """
     pace(url)
     headers = {}
     if (cached or {}).get("etag"):
@@ -173,10 +220,23 @@ def get_page(url, cached=None, safe=False):
 
 
 def _fetch(url, accept=None, safe=False, compressed=False, extra=None, raw=False):
-    """get, also returning the answer's headers: (text, headers). text is
-    None on 404 (headers None), or NOT_MODIFIED when the server says the page
-    hasn't changed (for get_page's extra headers). raw: the body's bytes
-    instead of text (get_bytes)."""
+    """Fetch url as get does, also returning the answer's headers.
+
+    Args:
+        url: The URL.
+        accept: The Accept header to send, if any.
+        safe: As in get: https to public addresses only, and at most
+            MAX_BYTES.
+        compressed: As in get: accept a gzipped answer, never with safe.
+        extra: More headers to send (get_page's).
+        raw: Whether to return the body's bytes instead of text
+            (get_bytes).
+
+    Returns:
+        (text, headers). text is None on a 404 (headers then None too), or
+        NOT_MODIFIED when the server says the page hasn't changed (for
+        get_page's extra headers).
+    """
     headers = {"User-Agent": config.user_agent(), **(extra or {})}
     if accept:
         headers["Accept"] = accept
@@ -188,7 +248,7 @@ def _fetch(url, accept=None, safe=False, compressed=False, extra=None, raw=False
     for attempt, delay in enumerate([0, *config.RETRY_DELAYS]):
         if attempt:
             delay = retry_wait(delay, last_err, host)
-            print(f"  retrying in {delay}s...", file=sys.stderr)
+            log.info(f"  retrying in {delay}s...")
             time.sleep(delay)
         try:
             request = urllib.request.Request(url, headers=headers)
@@ -214,11 +274,11 @@ def _fetch(url, accept=None, safe=False, compressed=False, extra=None, raw=False
                 return None, None
             if e.code == NOT_MODIFIED and extra:
                 return NOT_MODIFIED, e.headers
-            print(f"  {host} answered {e.code}", file=sys.stderr)
+            log.info(f"  {host} answered {e.code}")
             last_err = e
         except UnsafeURL:
             raise
         except (urllib.error.URLError, OSError) as e:
-            print(f"  {host} request failed ({e})", file=sys.stderr)
+            log.info(f"  {host} request failed ({e})")
             last_err = e
     raise last_err
