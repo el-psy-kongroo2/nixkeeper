@@ -875,7 +875,8 @@ export function safeUrl(url) {
 // writes itself), so text from the data can't add markup, even where an
 // escape would have been forgotten. Arrays are joined; null and undefined
 // give nothing (and the rest prints as in a template string: false as
-// "false", for aria-pressed). The result goes into innerHTML as is.
+// "false", for aria-pressed). It's written into an element through setHtml
+// or appendHtml.
 class Markup {
   constructor(text) {
     this.text = text;
@@ -897,6 +898,23 @@ export function html(strings, ...values) {
 }
 // Markup the page writes itself, as is. Never for text from the data.
 export const raw = (text) => new Markup(String(text));
+// No markup at all: what a part of the page that has nothing to show gives.
+export const NO_MARKUP = raw('');
+
+// The one way the page writes markup: only what html`` or raw() made, so
+// text from the data is always escaped. A Biome plugin
+// (biome-plugins/no-raw-html.grit) keeps innerHTML and its kin to this file.
+export function setHtml(el, markup) {
+  if (!(markup instanceof Markup)) throw new TypeError('setHtml needs html`` or raw()');
+  el.innerHTML = markup.text;
+}
+
+// The same, appended after el's children (the list's rows past the first
+// page).
+export function appendHtml(el, markup) {
+  if (!(markup instanceof Markup)) throw new TypeError('appendHtml needs html`` or raw()');
+  el.insertAdjacentHTML('beforeend', markup.text);
+}
 
 // A value as markup: an html template's kept as it is, anything else
 // escaped as html would.
