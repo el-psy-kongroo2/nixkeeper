@@ -917,7 +917,7 @@ describe('midway', () => {
 });
 
 describe('shards', () => {
-  // The same as Python's zlib.crc32 (nixkeeper/datastore.py), or a panel
+  // The same as Python's zlib.crc32 (nixkeeper/naming.py), or a panel
   // would look for a package in the wrong shard.
   test('crc32 matches zlib', () => {
     assert.equal(crc32(''), 0);
@@ -971,7 +971,7 @@ describe('withRunStamps', () => {
 });
 
 describe('views (every package)', () => {
-  test('viewSlug as datastore.slug', () => {
+  test('viewSlug as naming.slug', () => {
     assert.equal(viewSlug('Security review'), 'security-review');
     assert.equal(viewSlug('Qt-KDE'), 'qt-kde');
     assert.equal(viewSlug('gaming-team'), 'gaming-team');
