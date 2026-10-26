@@ -73,7 +73,9 @@ from .sources import nixpkgs as nixpkgs_source
 FEEDS = (typst_digest, emacs_digest, stackage_digest, cran_digest)
 
 
-def ask_hydra(attrs, nixpkgs, revision, previous, now, bulk=frozenset()):
+def ask_hydra(
+    attrs, nixpkgs, revision, previous, now, bulk=frozenset(), evaluations=None
+):
     """Collect Hydra's build results for the tracked attributes.
 
     Runs in the background from the start of the sync (main), as Hydra is
@@ -91,6 +93,7 @@ def ask_hydra(attrs, nixpkgs, revision, previous, now, bulk=frozenset()):
         bulk: The attributes only the digest answers (with every package,
             those not on the lists). Their meta.broken comes from the
             package index, for x86_64-linux, rather than being evaluated.
+        evaluations: The run's nixpkgs evaluations, for meta.broken.
 
     Returns:
         (broken, fetched), for hydra.add_builds: broken maps an attribute
@@ -99,7 +102,7 @@ def ask_hydra(attrs, nixpkgs, revision, previous, now, bulk=frozenset()):
     """
     started = time.monotonic()
     deep = [a for a in attrs if a not in bulk]
-    broken = nixpkgs_source.broken(deep, revision) if deep else {}
+    broken = nixpkgs_source.broken(deep, revision, evaluations) if deep else {}
     for attr in bulk:
         if nixpkgs[attr]["meta"].get("broken"):
             broken.setdefault(attr, ["x86_64-linux"])
@@ -181,7 +184,7 @@ class Run:
         now: This run's time (ISO 8601).
         nixpkgs: The channel's package index.
         lists: The package lists.
-        previous: The last sync's data.
+        previous: The last sync's data (history.PreviousRun).
         revision: The channel's commit, or the branch's name when it
             couldn't be read.
         everything: Whether the instance tracks every package (the community
@@ -192,6 +195,9 @@ class Run:
         tracked: The nixpkgs attributes of both, sorted.
         bulk_attrs: The attributes of the others, which only the digests
             answer.
+        evaluations: nixpkgs' evaluations (meta.broken, sources, patches),
+            reused from the last sync while the channel's commit hasn't
+            moved, and written for the next (kept_files).
     """
 
     now: str
@@ -204,6 +210,7 @@ class Run:
     bulk: dict
     tracked: list
     bulk_attrs: set
+    evaluations: nixpkgs_source.Evaluations
 
 
 @dataclasses.dataclass(frozen=True)
@@ -229,42 +236,46 @@ class Scope:
 def main():
     """Run one sync, phase by phase, and log how long each phase took."""
     phases = timing.Phases()
-    run = start()
-    phases.lap("nixpkgs: the index, the lists, the channel")
-    # Hydra is the slowest source (a request or more per package and
-    # platform), so it's asked in the background from here while the other
-    # sources are asked. Each server still gets one request at a time: only
-    # the waiting overlaps. Its answers are added to the rows in builds().
-    hydra_answers = background.Background(
-        ask_hydra,
-        run.tracked,
-        run.nixpkgs,
-        run.revision,
-        run.previous,
-        run.now,
-        run.bulk_attrs,
-    )
-    projects, index_rows = repology(run)
-    phases.lap("Repology")
-    scope = own_sources_and_lists(run, index_rows)
-    phases.lap("versions' own sources, branches, lists")
-    problems, checks, from_community = update_checks(run, scope, index_rows)
-    phases.lap("update checks")
-    if not hydra_answers.done():
-        log.info("Waiting for Hydra's answers...")
-    broken, fetched = hydra_answers.result()
-    phases.lap("waiting for Hydra")
-    # The packages updated together with another (the checks' "follows").
-    following = follows.of(checks)
-    builds(run, index_rows, broken, fetched, following, from_community)
-    phases.lap("builds, master, follows")
-    update_bot(run, scope, index_rows)
-    phases.lap("update bot")
-    prs = github_and_staging(run, scope, index_rows, following)
-    phases.lap("GitHub, staging and staging-next")
-    found_fixes = vulnerabilities_and_fixes(run, scope, index_rows, prs)
-    phases.lap("vulnerabilities, fixes, families")
-    write(run, projects, index_rows, problems, prs, found_fixes)
+    # Each source notes where its data came from as it's read, Hydra's from
+    # its thread, which ends inside the block: the manifest's "sources".
+    with about.collecting() as sources:
+        run = start()
+        phases.lap("nixpkgs: the index, the lists, the channel")
+        # Hydra is the slowest source (a request or more per package and
+        # platform), so it's asked in the background from here while the other
+        # sources are asked. Each server still gets one request at a time: only
+        # the waiting overlaps. Its answers are added to the rows in builds().
+        hydra_answers = background.Background(
+            ask_hydra,
+            run.tracked,
+            run.nixpkgs,
+            run.revision,
+            run.previous,
+            run.now,
+            run.bulk_attrs,
+            run.evaluations,
+        )
+        projects, index_rows = repology(run)
+        phases.lap("Repology")
+        scope = own_sources_and_lists(run, index_rows)
+        phases.lap("versions' own sources, branches, lists")
+        problems, checks, from_community = update_checks(run, scope, index_rows)
+        phases.lap("update checks")
+        if not hydra_answers.done():
+            log.info("Waiting for Hydra's answers...")
+        broken, fetched = hydra_answers.result()
+        phases.lap("waiting for Hydra")
+        # The packages updated together with another (the checks' "follows").
+        following = follows.of(checks)
+        builds(run, index_rows, broken, fetched, following, from_community)
+        phases.lap("builds, master, follows")
+        update_bot(run, scope, index_rows)
+        phases.lap("update bot")
+        prs = github_and_staging(run, scope, index_rows, following)
+        phases.lap("GitHub, staging and staging-next")
+        found_fixes = vulnerabilities_and_fixes(run, scope, index_rows, prs)
+        phases.lap("vulnerabilities, fixes, families")
+    write(run, projects, index_rows, problems, prs, found_fixes, sources)
     phases.lap("writing data/")
     notify_changes(run, scope, index_rows)
     phases.lap("notifications")
@@ -297,13 +308,11 @@ def start():
             "read in bulk only"
         )
     wanted = {**bulk, **listed}
-    # Clear the sources noted so far, so only this run's are reported (a test
-    # in the same process may have run a sync before).
-    about.taken()
     revision = nixpkgs_source.channel_revision()
     # nixpkgs' evaluations (meta.broken, sources, patches) are reused from
     # the last sync while the channel's commit hasn't moved.
-    if kept := nixpkgs_source.keep_answers():
+    evaluations = nixpkgs_source.Evaluations.read()
+    if kept := evaluations.count():
         log.info(f"nixpkgs evaluations: {kept:,} answers kept")
     # When the channel's commit couldn't be read, links use the branch.
     if revision == config.NIXPKGS_BRANCH:
@@ -323,6 +332,7 @@ def start():
             {a for attrs, _ in wanted.values() for a in attrs if a in nixpkgs}
         ),
         bulk_attrs={a for attrs, _ in bulk.values() for a in attrs if a in nixpkgs},
+        evaluations=evaluations,
     )
 
 
@@ -442,6 +452,7 @@ def update_checks(run, scope, index_rows):
         [row for row in scope.on_lists if row["name"] not in answered_by_releases],
         checks,
         run.revision,
+        run.evaluations,
     )
     to_run = worked.to_run(checks) if worked else {}
     checks_failed = upstream.add_checks(
@@ -607,7 +618,10 @@ def vulnerabilities_and_fixes(run, scope, index_rows, prs):
         prs_digest.build_fix_prs(scope.shown, prs["merged"], run.previous)
     # Each package's CVEs and advisories, with nixkeeper's verdicts.
     vulnerabilities_digest.add(
-        index_rows, vulnerabilities_digest.load(run.now), run.revision
+        index_rows,
+        vulnerabilities_digest.load(run.now),
+        run.revision,
+        run.evaluations,
     )
     # The open PRs patching them.
     if prs.get("raw") is not None:
@@ -629,11 +643,12 @@ def vulnerabilities_and_fixes(run, scope, index_rows, prs):
     return found_fixes
 
 
-def write(run, projects, index_rows, problems, prs, found_fixes):
+def write(run, projects, index_rows, problems, prs, found_fixes, sources):
     """Write the data folder: the manifest, the rows, and what's kept.
 
     With every package, also what only that instance writes
-    (every_package_outputs).
+    (every_package_outputs). sources is what the run's sources noted
+    (about.collecting), for the manifest.
     """
     # version is the nixkeeper that made this data, for the page's footer.
     index = {
@@ -653,9 +668,8 @@ def write(run, projects, index_rows, problems, prs, found_fixes):
     if page := listcheck.page_settings(run.lists):
         index["page"] = page  # the page's default theme
     # Where the data is from: each source's time, used or not, for the
-    # page's "checked" panel. Hydra noted its own in the background, which
-    # has finished by now.
-    index["sources"] = about.taken()
+    # page's "checked" panel.
+    index["sources"] = sources
     merge, history_points, fixed, events = (
         every_package_outputs(run, index_rows, index, prs, found_fixes)
         if run.everything
@@ -669,7 +683,6 @@ def write(run, projects, index_rows, problems, prs, found_fixes):
         events=events,
         kept=kept_files(run, merge),
     )
-    nixpkgs_source.stop_keeping()
 
 
 def kept_files(run, merge):
@@ -687,7 +700,7 @@ def kept_files(run, merge):
         {path in data/: data}, with None for a file to leave out.
     """
     return {
-        nixpkgs_source.EVALUATIONS: nixpkgs_source.kept_answers(),
+        nixpkgs_source.EVALUATIONS: run.evaluations.used(),
         # The maintainer and team views' "You can merge these".
         datastore.MERGE_VIEW: {"checkedAt": run.now, "prs": merge}
         if merge is not None

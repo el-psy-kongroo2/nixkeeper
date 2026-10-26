@@ -244,7 +244,7 @@ class Patched(unittest.TestCase):
     channel has the patch too."""
 
     def add(self, rows, unstable=(), stable=(), stable_version="1.5"):
-        def patches(attrs, revision):
+        def patches(attrs, revision, evaluations=None):
             names = {"unstable": unstable, "stable": stable}[revision]
             return {a: list(names) for a in attrs}
 
@@ -377,9 +377,10 @@ class Load(unittest.TestCase):
             mock.patch.object(http, "get", side_effect=get),
             mock.patch.object(http, "get_bytes", return_value=body),
             mock.patch("sys.stderr", io.StringIO()),
+            about.collecting() as noted,
         ):
-            about.taken()
-            return vd.load(NOW), about.taken()
+            found = vd.load(NOW)
+        return found, noted
 
     def test_used_when_complete_and_recent(self):
         meta = {
