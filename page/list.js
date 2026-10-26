@@ -4,6 +4,16 @@
 // from the store, the state and the filters; app.js draws it (render) and
 // handles its controls. Its own state is listView.
 
+import { viewSlug } from './address.js';
+import { daysText, daysUntil, shortAge, timeAgo } from './dates.js';
+import {
+  facetCounts,
+  familyLabel,
+  inPickedSet,
+  NAME_STATUSES,
+  nameSet,
+  TOP_LEVEL,
+} from './facets.js';
 import {
   AGES,
   byMaintainer,
@@ -21,49 +31,30 @@ import {
   SORTS,
   shownHandle,
 } from './filters.js';
+import { closeHtml, mergeHtml } from './maintainer-view.js';
+import { html, raw, safeUrl, setHtml } from './markup.js';
+import { faviconKey } from './palette.js';
+import { isHidden, remember } from './prefs.js';
+import { REFINE_WORDS, searchText } from './search.js';
+import { buildsWith, failedBuilds, hasFailure, scopeHref, state, teamName } from './state.js';
 import {
   buildFailedBecause,
   communityCheck,
-  compareVersions,
   computeStatus,
-  daysText,
-  daysUntil,
-  facetCounts,
   failedBecause,
-  familyLabel,
-  faviconKey,
-  html,
-  inPickedSet,
-  isVulnerable,
   midway,
-  NAME_STATUSES,
-  nameSet,
   neverBuiltOn,
   nothingCompared,
   olderVersionKept,
   onBranch,
   onMaster,
   onPlatform,
-  raw,
-  safeUrl,
-  setHtml,
-  shortAge,
-  TOP_LEVEL,
   targetVersion,
-  timeAgo,
   unbuiltOn,
   unbuiltWhere,
   updateTitle,
-  versionDiff,
-  viewSlug,
-  vulnSources,
-  vulnSummary,
   waitingForChannel,
-} from './logic.js';
-import { closeHtml, mergeHtml } from './maintainer-view.js';
-import { isHidden, remember } from './prefs.js';
-import { REFINE_WORDS, searchText } from './search.js';
-import { buildsWith, failedBuilds, hasFailure, scopeHref, state, teamName } from './state.js';
+} from './status.js';
 import { store } from './store.js';
 import {
   archivedText,
@@ -87,6 +78,8 @@ import {
   UNSUPPORTED_TEXT,
   UNVERSIONED_TITLE,
 } from './ui.js';
+import { compareVersions, versionDiff } from './versions.js';
+import { isVulnerable, vulnSources, vulnSummary } from './vulns.js';
 
 // Its own state. The visitor's own GitHub handle, for "Your packages" (kept
 // in their browser only, nixkeeper-handle), how many packages list them

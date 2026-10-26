@@ -6,15 +6,9 @@
 // the box shows it. Where the page is (a view, a set, a list, a cause, one
 // package) stays the address's: not in the box.
 
-import {
-  html,
-  maintainersParam,
-  NAME_STATUSES,
-  parseMaintainers,
-  parseTeams,
-  setHtml,
-  teamsParam,
-} from './logic.js';
+import { NAME_STATUSES } from './facets.js';
+import { html, setHtml } from './markup.js';
+import { maintainersParam, parseMaintainers, parseTeams, teamsParam } from './people.js';
 import { known, state } from './state.js';
 
 // The refines (REFINES keys), as qualifiers.

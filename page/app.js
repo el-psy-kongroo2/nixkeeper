@@ -1,4 +1,13 @@
+import { homeHref, pageLinks, VIEWS, viewPath, withRunStamps } from './address.js';
 import { dataUrl, fullRowOf, githubRepo, locateData, readJson } from './data.js';
+import {
+  decodeFacets,
+  foldFamilies,
+  inPickedSet,
+  matchFacets,
+  NAME_STATUSES,
+  TOP_LEVEL,
+} from './facets.js';
 import { currentFiltered, FILTERS, KNOWN, PLATFORMS } from './filters.js';
 import {
   BY_SHOWN,
@@ -14,39 +23,17 @@ import {
   wireList,
 } from './list.js';
 import {
-  appendHtml,
-  attentionPrint,
-  computeStatus,
-  decodeFacets,
-  foldFamilies,
-  homeHref,
-  html,
-  inPickedSet,
-  maintainerMatches,
-  matchFacets,
-  NAME_DOTS,
-  NAME_STATUSES,
-  NO_MARKUP,
-  nameMatches,
-  pageLinks,
-  prPrint,
-  raw,
-  setHtml,
-  TOP_LEVEL,
-  themeFor,
-  VIEWS,
-  viewPath,
-  withRunStamps,
-} from './logic.js';
-import {
   hiddenPrPrints,
   maintainerItem,
   maintainersHtml,
   saveHiddenPrs,
   wireMaintainerView,
 } from './maintainer-view.js';
+import { appendHtml, html, NO_MARKUP, raw, setHtml } from './markup.js';
 import { highlightShown, overviewHtml, wireOverview } from './overview.js';
 import { fillBuilds, fillDetail, fillUpdate } from './package-view.js';
+import { themeFor } from './palette.js';
+import { maintainerMatches, NAME_DOTS, nameMatches } from './people.js';
 import { HIDDEN_KEY, hiddenPrints, isHidden, pruneHidden, remember, stored } from './prefs.js';
 import {
   matchNote,
@@ -67,6 +54,7 @@ import {
   state,
   writeState,
 } from './state.js';
+import { attentionPrint, computeStatus, prPrint } from './status.js';
 import { store } from './store.js';
 import { timer } from './timing.js';
 import { fmt } from './ui.js';

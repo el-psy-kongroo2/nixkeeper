@@ -4,30 +4,9 @@
 // sections from panel.js. What it needs of the page comes in `page`
 // (app.js's panelPage): a package's address, and hiding it.
 
-import {
-  capitalized,
-  communityCheck,
-  comparedRepos,
-  compareVersions,
-  computeStatus,
-  daysText,
-  daysUntil,
-  fromMaster,
-  html,
-  nixkeeperEntry,
-  nothingCompared,
-  olderVersionKept,
-  onBranch,
-  onHost,
-  onMaster,
-  raw,
-  safeUrl,
-  setHtml,
-  shortAge,
-  targetVersion,
-  waitingForChannel,
-  withoutLeadingJoiner,
-} from './logic.js';
+import { onHost } from './address.js';
+import { daysText, daysUntil, shortAge } from './dates.js';
+import { capitalized, html, raw, safeUrl, setHtml, withoutLeadingJoiner } from './markup.js';
 import {
   backportNote,
   buildLine,
@@ -40,6 +19,18 @@ import {
 } from './panel.js';
 import { writeQuery } from './search.js';
 import { failedBuilds, state } from './state.js';
+import {
+  communityCheck,
+  computeStatus,
+  fromMaster,
+  nixkeeperEntry,
+  nothingCompared,
+  olderVersionKept,
+  onBranch,
+  onMaster,
+  targetVersion,
+  waitingForChannel,
+} from './status.js';
 import { store } from './store.js';
 import {
   archivedText,
@@ -60,6 +51,7 @@ import {
   UNSUPPORTED_TEXT,
   UNVERSIONED_TITLE,
 } from './ui.js';
+import { comparedRepos, compareVersions } from './versions.js';
 
 export const NIX_REPO = 'nix_unstable';
 
