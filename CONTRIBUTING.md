@@ -44,10 +44,12 @@ happen. For what nixkeeper does and how to set up your own, see the
 - `docs/`: the documentation, one page per topic ([docs/README.md](docs/README.md)
   lists them); `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
   `CHANGELOG.md` and `LICENSE` stay at the root, where GitHub looks for them
-- `page/`: the page (`index.html`, `app.js`, `style.css`), reading `data/`
-  from the `data` branch. Its rules are in modules that never touch the
-  page, so they can be tested, and that import only each other: `markup.js`
-  (HTML from data, escaped), `versions.js` (comparing versions), `dates.js`
+- `page/`: the page (`index.html`, `app.js`, and `style-*.css`, a file per
+  part of the page, loaded in `index.html`'s order: later files override
+  earlier ones), reading `data/` from the `data` branch. Its rules are in
+  modules that never touch the page, so they can be tested, and that import
+  only each other: `markup.js` (HTML from data, escaped), `versions.js`
+  (comparing versions), `dates.js`
   (days and ages), `vulns.js` (vulnerabilities), `status.js` (a package's
   status), `people.js` (maintainers and teams), `address.js` (the page's
   addresses), `facets.js` (the names index) and `palette.js` (the palettes
@@ -168,6 +170,14 @@ order changes. The steps, and the modules they use:
 | open PR and issue counts, and update PRs | `sources/github.py` |
 | check `data/` against its shape, then write it | `shape.py`, `datastore/` |
 | rewrite the status issue, commenting on what's newly wrong | `notify.py`, `changes.py` |
+
+What a run reads or works out belongs to the run, not to a module: the
+`Run` holds nixpkgs' evaluations (`sources/nixpkgs.py`'s `Evaluations`) and
+the previous run (`history.PreviousRun`, its rows indexed once), and the
+sources a sync reports are collected inside `about.collecting()`. The few
+values kept module-level on purpose (`sources/http.py`'s pace, the Repology
+domain that answered, `datastore/`'s read cache, the log's per-thread depth)
+say why where they're defined.
 
 Around that:
 
@@ -421,8 +431,8 @@ Commit the regenerated files with the change to the scripts. `page/`'s brand
 files are copies, and `nix flake check` fails when one of them, or
 `assets/brand/`'s tokens, differs from what it's made from.
 
-The page's own colours (`page/style.css`) are variables that point at the
-tokens' roles, e.g. `--accent: var(--nk-link-text)`, so a change to the
+The page's own colours (`page/style-base.css`) are variables that point at
+the tokens' roles, e.g. `--accent: var(--nk-link-text)`, so a change to the
 palette reaches the page through `nix run .#brand`.
 
 ## Releasing

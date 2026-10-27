@@ -4,6 +4,7 @@
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -24,7 +25,10 @@ class Page(unittest.TestCase):
         os.mkdir(self.data)
         self.put("index.json", {"packages": [{"name": "unciv"}]})
         self.put("unciv.json", [])
-        patcher = mock.patch.object(config, "OUT_DIR", self.data)
+        # main() sets these from the flags; put them back after each test.
+        patcher = mock.patch.multiple(
+            config, LISTS=config.LISTS, OUT_DIR=self.data, NOTIFY=config.NOTIFY
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
         out = mock.patch("sys.stdout", io.StringIO())
@@ -42,7 +46,10 @@ class Page(unittest.TestCase):
     def test_writes_the_page_and_the_data(self):
         site = os.path.join(self.dir.name, "site")
         cli.main(["page", site, "--data-dir", self.data])
-        for name in ("index.html", "app.js", "style.css", "favicon.svg"):
+        with open(os.path.join(site, "index.html")) as f:
+            sheets = re.findall(r'href="([^"]+\.css)"', f.read())
+        self.assertIn("style-base.css", sheets)
+        for name in ("index.html", "app.js", "favicon.svg", *sheets):
             self.assertTrue(os.path.exists(os.path.join(site, name)), name)
         with open(os.path.join(site, "data", "index.json")) as f:
             self.assertEqual(json.load(f)["packages"][0]["name"], "unciv")
@@ -180,7 +187,9 @@ class Commands(unittest.TestCase):
     def test_page_and_serve(self):
         with (
             mock.patch("nixkeeper.lock.held"),
-            mock.patch.multiple(config, LISTS=config.LISTS, OUT_DIR=config.OUT_DIR),
+            mock.patch.multiple(
+                config, LISTS=config.LISTS, OUT_DIR=config.OUT_DIR, NOTIFY=config.NOTIFY
+            ),
             mock.patch.object(page, "write", return_value="/x") as write,
             mock.patch.object(page, "serve") as serve,
             mock.patch("sys.stdout", io.StringIO()),

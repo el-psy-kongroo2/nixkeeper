@@ -19,6 +19,7 @@ FIELDS = ("repo", "srcname", "version", "status", "vulnerable")
 
 # The domain that last answered: tried first for the rest of the run, so an
 # unreachable first domain costs one failed connection, not one per lookup.
+# Process-wide on purpose: it's only which domain to try first.
 _working = None
 
 
