@@ -11,6 +11,31 @@ The version lives in `pyproject.toml`; `flake.nix` reads it from there.
 
 ### Added
 
+- **Worked-out update checks on GitLab and Codeberg**: a package on the
+  lists fetched from a tag on a GitLab instance (gitlab.com, freedesktop,
+  GNOME, KDE, Debian's salsa) or on Codeberg, without an update check of
+  its own, is checked against its repository's tags there, as one from
+  GitHub is (its tag scheme, plain versions only), through each forge's
+  API without a token. 1,346 packages in nixpkgs could have one (2026-10-28);
+  of 30 tried, 11 had a newer tag than nixpkgs (bolt, tellico, enter-tex).
+  The sync's log names the forge each compares ("Worked-out update checks").
+
+- **When a package's GitHub repository is archived, renamed, moved or
+  gone**, its row says so: "upstream archived" (read-only, its owner's way
+  of saying it's no longer worked on), "upstream renamed" (the same owner,
+  a new name) or "upstream moved" (another owner, maybe a new name too:
+  GitHub redirects the name nixpkgs fetches, which nixpkgs should update),
+  or "upstream gone" (GitHub doesn't know it any more, so its source can't
+  be downloaded from there), with what it means in the package's panel.
+  They have their own list, **Upstream changed** (`?view=upstream`, up to
+  date or not), counted by kind in "nixpkgs in numbers" on the overview,
+  each kind opening it; and narrow any list, picked under **Upstream** or
+  typed (`has:upstream`, `is:upstream-gone`, `is:upstream-archived`,
+  `is:upstream-renamed`, `is:upstream-moved`). From
+  nixkeeper-versions' digest, which reads every package fetched from GitHub
+  every 12 hours (`upstreamRepo` in the rows, docs/data.md). On 2026-10-27,
+  39 repositories were gone.
+
 - **Where the time goes**: a sync's log ends with how long each of its
   phases took, the longest first (`Phases: 1 min 17 s in all`, then
   `41 s 54% vulnerabilities, fixes, families`...), where only Hydra's time

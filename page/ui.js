@@ -182,6 +182,45 @@ export const ARCHIVED_TITLE =
 export const archivedText = (pkg) =>
   `${ARCHIVED_TITLE}. ${pkg.markedBroken ? 'nixpkgs marks it broken.' : "nixpkgs doesn't mark it broken: likely broken anyway, or due for removal."}`;
 
+// A package's GitHub repository that's archived, renamed, moved or gone (the
+// row's "upstreamRepo", sources/releases_digest.py): what became of it, its
+// badge, and what it means. Renamed: the same owner, a new name; moved:
+// another owner (and maybe a new name too), which is also how an owner
+// renaming their account shows. The same rule as facts.upstream_kind.
+const ownerOf = (repo) => repo.split('/')[0].toLowerCase();
+const nameOf = (repo) => repo.split('/')[1].toLowerCase();
+const renamed = (u) => u.movedTo && ownerOf(u.movedTo) === ownerOf(u.repo);
+
+export const upstreamKind = (u) =>
+  !u
+    ? null
+    : u.gone
+      ? 'gone'
+      : u.archived
+        ? 'archived'
+        : u.movedTo
+          ? renamed(u)
+            ? 'renamed'
+            : 'moved'
+          : null;
+
+export const upstreamRepoLabel = (u) => `upstream ${upstreamKind(u)}`;
+
+export const upstreamRepoText = (u) => {
+  if (u.gone) {
+    return `Its GitHub repository, ${u.repo}, is gone: GitHub doesn't know it any more (deleted, or made private). Its source can't be downloaded from GitHub; builds use the copy nixpkgs' binary cache already has`;
+  }
+  const where = u.movedTo
+    ? renamed(u)
+      ? `renamed: nixpkgs fetches ${u.repo}, which GitHub now redirects to ${u.movedTo}`
+      : `moved to another owner${nameOf(u.movedTo) === nameOf(u.repo) ? '' : ' and renamed'}: nixpkgs fetches ${u.repo}, which GitHub now redirects to ${u.movedTo}`
+    : '';
+  if (u.archived) {
+    return `Its GitHub repository, ${u.repo}, is archived: read-only, its owner's way of saying it's no longer worked on${where ? `. It was also ${where}` : ''}`;
+  }
+  return `Its GitHub repository was ${where}. The source still downloads; nixpkgs should use the new name`;
+};
+
 export const LOOKUP_FAILED =
   "Repology couldn't be reached on the last sync, and there's no earlier data";
 
